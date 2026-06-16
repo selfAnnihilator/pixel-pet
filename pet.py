@@ -76,6 +76,9 @@ class Pet:
         self.afk = False
         self.paused = False    # fullscreen app present: hide + freeze
         self._pre_meow_action = None  # action to resume once a meow finishes
+        self.dragging = False
+        self._pre_drag_action = None  # action to resume once a drag ends
+        self._drag_dx = self._drag_dy = 0.0
         self.W = self.H = 0
         self._last = time.monotonic()
         self._children = []    # spawned helper procs to reap on exit
@@ -170,8 +173,43 @@ class Pet:
     def _exit_meow(self):
         self.enter_action(self._pre_meow_action or "sit")
 
+    def start_drag(self):
+        """Mouse-drag begins: freeze normal behavior, switch to the dangle sprite."""
+        if self.paused:
+            return
+        self._pre_drag_action = (self._pre_meow_action if self.action == "meow"
+                                  else self.action) or "sit"
+        self.action = "drag"
+        self.dragging = True
+        self.action_start = time.monotonic()
+        self.enter("drag")
+
+    def end_drag(self):
+        # hand off from the held first half straight into the second half;
+        # frame is already sitting at the halfway point, just let it keep going
+        self.dragging = False
+        self.action = "drop"
+        self.frame_clock = 0.0
+
     def update(self, dt):
         now = time.monotonic()
+
+        # dragging: animate the "drag" row up to its halfway frame and hold there
+        # while held; on release (see end_drag) action becomes "drop" and we play
+        # out the remaining half once, then resume whatever was running before.
+        if self.action in ("drag", "drop"):
+            a = self.sheet.anim("drag")
+            half = max(1, a["frames"] // 2)
+            cap = (half - 1) if self.action == "drag" else (a["frames"] - 1)
+            dur = 1.0 / a["fps"]
+            self.frame_clock += dt
+            while self.frame_clock >= dur and self.frame < cap:
+                self.frame_clock -= dur
+                self.frame += 1
+            if self.action == "drop" and self.frame >= cap:
+                self.enter_action(self._pre_drag_action or "sit")
+            return
+
         a = self.sheet.anim(self.state)
         # advance animation frames
         self.frame_clock += dt
@@ -430,12 +468,40 @@ def main():
                 rect = cairo.RectangleInt(int(dx), int(dy), int(rw), int(rh))
                 surface.set_input_region(cairo.Region(rect))
 
-        def on_pet_clicked(gesture, n_press, x, y):
-            pet.trigger_meow()
+        # single GestureDrag handles both: a short press-release (no real motion)
+        # is treated as a click -> meow; crossing DRAG_THRESH px starts a real drag
+        # that follows the cursor and shows the "drag" sprite until release.
+        DRAG_THRESH = 6
 
-        click = Gtk.GestureClick.new()
-        click.connect("pressed", on_pet_clicked)
-        area.add_controller(click)
+        def on_drag_begin(gesture, start_x, start_y):
+            gesture.set_state(Gtk.EventSequenceState.CLAIMED)
+
+        def on_drag_update(gesture, offset_x, offset_y):
+            ok, start_x, start_y = gesture.get_start_point()
+            if not ok:
+                return
+            if not pet.dragging:
+                if (offset_x ** 2 + offset_y ** 2) ** 0.5 < DRAG_THRESH:
+                    return
+                pet.start_drag()
+                pet._drag_dx = pet.gx - start_x
+                pet._drag_dy = pet.gy - start_y
+            pet.gx = start_x + offset_x + pet._drag_dx
+            pet.gy = start_y + offset_y + pet._drag_dy
+            pet._clamp()
+            area.queue_draw()
+
+        def on_drag_end(gesture, offset_x, offset_y):
+            if pet.dragging:
+                pet.end_drag()
+            else:
+                pet.trigger_meow()
+
+        drag = Gtk.GestureDrag.new()
+        drag.connect("drag-begin", on_drag_begin)
+        drag.connect("drag-update", on_drag_update)
+        drag.connect("drag-end", on_drag_end)
+        area.add_controller(drag)
 
         def tick():
             now = time.monotonic()

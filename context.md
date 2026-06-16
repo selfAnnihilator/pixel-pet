@@ -1,6 +1,6 @@
 # Pixel Pet — Context
 
-> Living status doc. **Update after every successful change.** Last updated: 2026-06-16 (click-to-meow, git init)
+> Living status doc. **Update after every successful change.** Last updated: 2026-06-16 (draggable pet)
 
 ## ⚠️ Maintenance rule (read first)
 **This file MUST be updated after every successfully implemented change.** On each change:
@@ -21,7 +21,12 @@ workspace-independent. Roams in 2D, sits, sleeps when you're away.
   full-output. Click-through everywhere except the pet's own bbox (input region
   shrunk to that rect each tick) so the cat itself is clickable while the rest
   of the screen still passes clicks through. Pixel-art scaled with
-  `FILTER_NEAREST`.
+  `FILTER_NEAREST`. A single `Gtk.GestureDrag` on the drawing area distinguishes
+  click vs drag: press+release under `DRAG_THRESH` (6px) = `pet.trigger_meow()`;
+  crossing that threshold = `pet.start_drag()`, which freezes the state machine
+  and follows the cursor (offset-locked to where it was grabbed) until release
+  (`pet.end_drag()` resumes whatever action was active before, same pattern as
+  the meow freeze/resume).
 - **`run-pet.sh`** — launcher. Sets `LD_PRELOAD=libgtk4-layer-shell.so` (must load
   before libwayland) then runs `pet.py`.
 - **`assets/manifest.json` + `assets/cat/cat.png`** — sprite sheet + metadata.
@@ -33,7 +38,7 @@ niri 26.04, single output eDP-1 1920x1080, Wayland, Arch/cachyos.
 Working dir: `/home/abhi/code/pixel-pet` (now a git repo, initialized 2026-06-16).
 
 ### Sprite sheet truth (rows were mislabeled by auto-segmenter)
-cat.png 594x196, cell 66x28, 9 cols, 7 rows:
+cat.png 594x224, cell 66x28, 9 cols, 8 rows:
 - row0 `idle` — 6 **distinct sit poses** (NOT a loop; hold one frame)
 - row1 `walk` — side/horizontal walk (8)
 - row2 `sleep` — (9)
@@ -42,6 +47,11 @@ cat.png 594x196, cell 66x28, 9 cols, 7 rows:
 - row5 `walk_back` — back walk, ¾ away (6)
 - row6 `meow` — front-facing meow pose, 3 frames, not a loop (added; sourced from
   `assets/src/Free pack/cat 1.png` "meow stand" row, same gray palette as the rest)
+- row7 `drag` — sitting pose, 4 frames, loop (added; sourced directly from a
+  user-supplied lavender/white sprite, not the gray source pack — background was a
+  baked-in gray checkerboard, not real alpha, so it was chroma-keyed out by exact
+  RGB match `(84,81,87)`/`(76,73,79)` before cropping/centering/bottom-aligning the
+  same way as other rows)
 - **No groom animation exists** in this pack.
 - Source pack has more unused rows (eat, yawn, wash, itch, hiss, paw attack, on
   hind legs, plus 3 sleep poses each L/R) in `assets/src/Free pack/cat 1.png` if
@@ -73,8 +83,32 @@ cat.png 594x196, cell 66x28, 9 cols, 7 rows:
       (`bw,bh` in `_draw_meow_bubble`); font bumped to `12 * SCALE / 4` (was 6)
       to read clearly — text is allowed to crowd/overflow the box slightly
       rather than shrinking the bubble.
+- [x] **Draggable pet.** `Gtk.GestureDrag` on the drawing area; under
+      `DRAG_THRESH` px of motion on release it's a click (meow), past it
+      `pet.start_drag()` fires: action freezes to `"drag"`, sprite switches to
+      the new `drag` row and position is driven directly from the cursor
+      (locked to the grab offset so the cat doesn't jump under the pointer)
+      every `drag-update`. Release → `pet.end_drag()` resumes whatever action
+      was running before the grab. Sprite for this row came from a
+      user-supplied lavender/white sitting-cat image, not the gray source
+      pack — see sprite-sheet truth section for the chroma-key note.
+      **Split-halfway animation:** the 4-frame `drag` row plays only its first
+      half (frame 0→1, the halfway point) while held, then holds there for as
+      long as the drag continues — it does **not** loop. On release, action
+      becomes `"drop"` (still sprite row `"drag"`) and frames 1→3 play out
+      once, then `enter_action(pre_drag_action)` resumes normal behavior.
+      Both phases are handled in a dedicated branch at the top of
+      `Pet.update()` (`if self.action in ("drag", "drop")`), bypassing the
+      generic loop/hold frame-advance used by every other state. `loop` in
+      `manifest.json`'s `drag` entry is unused by this path (kept `false` for
+      clarity) — frame capping is computed from `frames // 2`, not the
+      manifest loop flag.
 
 ## To do / open
+- [ ] `assets/src/rest-block-reference.png` — stashed crop of the source pack's
+      REST block (alert/stretch/lounge/flopped-curled poses, gray palette,
+      untouched, not wired into manifest). Candidate frames for a future
+      "held by scruff / flopped" reaction if wanted later.
 - [ ] Decide fate of dead Electron files (`src/`, `electron-builder.yml`, …) — delete?
 - [ ] Groom: source/add a real groom animation if wanted (none in current pack).
 - [ ] README: document behavior model + `PET_IDLE_SEC`, swayidle/niri optional deps.
