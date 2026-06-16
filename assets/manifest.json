@@ -52,7 +52,7 @@
         },
         "drag": {
           "row": 7,
-          "frames": 4,
+          "frames": 7,
           "fps": 6,
           "loop": false
         },
@@ -60,6 +60,66 @@
           "row": 8,
           "frames": 8,
           "fps": 2,
+          "loop": true
+        },
+        "fidget": {
+          "row": 9,
+          "frames": 11,
+          "fps": 6,
+          "loop": false
+        },
+        "react_l": {
+          "row": 10,
+          "frames": 2,
+          "fps": 4,
+          "loop": true
+        },
+        "react_r": {
+          "row": 11,
+          "frames": 2,
+          "fps": 4,
+          "loop": true
+        },
+        "react_land": {
+          "row": 12,
+          "frames": 1,
+          "fps": 4,
+          "loop": false
+        },
+        "sleep1": {
+          "row": 13,
+          "frames": 2,
+          "fps": 2,
+          "loop": true
+        },
+        "sleep2": {
+          "row": 14,
+          "frames": 2,
+          "fps": 2,
+          "loop": true
+        },
+        "sleep3": {
+          "row": 15,
+          "frames": 2,
+          "fps": 2,
+          "loop": true
+        },
+        "sleep4": {
+          "row": 16,
+          "frames": 2,
+          "fps": 2,
+          "loop": true
+        },
+        "meow_sit2": {
+          "row": 17,
+          "frames": 3,
+          "fps": 3,
+          "loop": true
+        },
+        "meow_lie": {
+          "row": 18,
+          "frames": 3,
+          "fps": 3,
           "loop": true
         }
       }

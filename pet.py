@@ -31,6 +31,33 @@ IDLE_SEC = int(os.environ.get("PET_IDLE_SEC", "180"))  # AFK -> sleep after this
 SIT_MIN, SIT_MAX = 5.0, 12.0      # seconds to hold a sit
 WALK_MIN = 2.5                    # keep walking at least this long before settling
 MEOW_DUR = 1.0                    # seconds the meow (anim + dialog) stays up
+FIDGET_CHANCE = 0.4                # odds a given sit includes a mid-sit fidget
+REACT_POOL = ["sit", "react_l", "react_r", "react_land"]  # drop outcome, picked uniformly
+SLEEP_POOL = ["flop", "sleep1", "sleep2", "sleep3", "sleep4", "meow_sit2", "meow_lie"]  # AFK pose, picked once per nap
+
+
+def _alpha_bbox(pixbuf):
+    """Tight (x0, y0, x1, y1) box around the non-transparent pixels of a cell,
+    in cell-local pixel coords (x1/y1 exclusive). Falls back to the full cell
+    if there's no alpha channel."""
+    w, h = pixbuf.get_width(), pixbuf.get_height()
+    if not pixbuf.get_has_alpha():
+        return (0, 0, w, h)
+    stride = pixbuf.get_rowstride()
+    n_ch = pixbuf.get_n_channels()
+    data = pixbuf.get_pixels()
+    min_x, min_y, max_x, max_y = w, h, -1, -1
+    for y in range(h):
+        row_off = y * stride
+        for x in range(w):
+            if data[row_off + x * n_ch + 3] > 10:
+                if x < min_x: min_x = x
+                if x > max_x: max_x = x
+                if y < min_y: min_y = y
+                if y > max_y: max_y = y
+    if max_x < 0:
+        return (0, 0, w, h)
+    return (min_x, min_y, max_x + 1, max_y + 1)
 
 
 class Sheet:
@@ -44,11 +71,13 @@ class Sheet:
         cw, ch = pet_def["cellW"], pet_def["cellH"]
         self.cw, self.ch = cw, ch
         self.frames = {}  # state -> [pixbuf, ...]
+        self.bboxes = {}  # state -> [(x0,y0,x1,y1), ...] tight alpha box per frame
         for state, a in pet_def["anims"].items():
             row = a["row"]
             self.frames[state] = [
                 full.new_subpixbuf(c * cw, row * ch, cw, ch) for c in range(a["frames"])
             ]
+            self.bboxes[state] = [_alpha_bbox(pb) for pb in self.frames[state]]
 
     def anim(self, state):
         return self.defn["anims"][state]
@@ -75,9 +104,14 @@ class Pet:
         self.tx = self.ty = 0.0   # walk target
         self.afk = False
         self.paused = False    # fullscreen app present: hide + freeze
+        self.forced_sleep = False  # right-click: sleep + stop moving until woken
         self._pre_meow_action = None  # action to resume once a meow finishes
         self.dragging = False
         self._drag_dx = self._drag_dy = 0.0
+        self._fidgeting = False        # mid-sit head-turn/blink fidget playing
+        self._fidget_at = None         # monotonic time the next fidget should start
+        self._fidget_end = 0.0
+        self._sit_pose_frame = 0       # held idle frame to return to after a fidget
         self.W = self.H = 0
         self._last = time.monotonic()
         self._children = []    # spawned helper procs to reap on exit
@@ -103,7 +137,8 @@ class Pet:
         self.hold = False
 
     # non-walk action -> animation row (walk picks a directional row, see _walk_state)
-    _ANIM = {"sit": "idle", "sleep": "flop"}
+    _ANIM = {"sit": "idle", "sleep": "flop",
+              "react_l": "react_l", "react_r": "react_r", "react_land": "react_land"}
 
     def enter_action(self, name):
         self.action = name
@@ -113,12 +148,27 @@ class Pet:
             st, self.facing_left = self._walk_state(self.tx - self.gx,
                                                     self.ty - self.gy)
             self.enter(st)
+        elif name == "sleep":
+            # one random pose per nap; holds/loops until woken (no reroll mid-sleep)
+            self.enter(random.choice(SLEEP_POOL))
         else:
             self.enter(self._ANIM[name])
             if name == "sit":
                 self.sit_dur = random.uniform(SIT_MIN, SIT_MAX)
                 self.frame = self._sit_frame()  # one calm pose, held (no rotating)
                 self.hold = True
+                self._sit_pose_frame = self.frame
+                self._fidgeting = False
+                # fidget sprite is a front-facing head-turn; skip it on the
+                # back-facing sit pose (frame 1) where no face is visible
+                self._fidget_at = (
+                    self.action_start + random.uniform(0.3, 0.7) * self.sit_dur
+                    if self.frame != 1 and random.random() < FIDGET_CHANCE
+                    else None
+                )
+            elif name in ("react_l", "react_r", "react_land"):
+                # hold/loop the reaction for the same dwell a sit would get
+                self.sit_dur = random.uniform(SIT_MIN, SIT_MAX)
 
     def _sit_frame(self):
         # idle row holds several *distinct* poses; only keep the upright sits
@@ -161,21 +211,34 @@ class Pet:
         self.enter_action(nxt)
 
     def trigger_meow(self):
-        """Click reaction: play the meow sprite + dialog, then resume prior action."""
+        """Click reaction: play meow or hiss (never the drop-only 'sad'), then resume prior action."""
         if self.action == "meow" or self.paused:
             return
         self._pre_meow_action = self.action or "sit"
         self.action = "meow"
         self.action_start = time.monotonic()
-        self.enter("meow")
+        self.enter(random.choice(["meow", "react_l", "react_r"]))
 
     def _exit_meow(self):
         self.enter_action(self._pre_meow_action or "sit")
+
+    def force_sleep(self):
+        """Right-click: nap in place (random pose) until woken by a left-click or drag."""
+        if self.paused:
+            return
+        self.forced_sleep = True
+        self.enter_action("sleep")
+
+    def wake(self):
+        """Left-click or drag while forced-asleep: end the nap, resume normal behavior."""
+        self.forced_sleep = False
+        self.enter_action("sit")
 
     def start_drag(self):
         """Mouse-drag begins: freeze normal behavior, switch to the dangle sprite."""
         if self.paused:
             return
+        self.forced_sleep = False
         self.action = "drag"
         self.dragging = True
         self.action_start = time.monotonic()
@@ -199,14 +262,24 @@ class Pet:
         if self.action in ("drag", "drop"):
             a = self.sheet.anim("drag")
             half = max(1, a["frames"] // 2)
-            cap = (half - 1) if self.action == "drag" else (a["frames"] - 1)
+            dangle_lo, dangle_hi = half - 1, a["frames"] - half  # middle "dangling" frames
             dur = 1.0 / a["fps"]
             self.frame_clock += dt
-            while self.frame_clock >= dur and self.frame < cap:
-                self.frame_clock -= dur
-                self.frame += 1
-            if self.action == "drop" and self.frame >= cap:
-                self.enter_action("sit")
+            if self.action == "drag":
+                while self.frame_clock >= dur:
+                    self.frame_clock -= dur
+                    if self.frame < dangle_lo:
+                        self.frame += 1
+                    else:
+                        # reached the held pose: loop the dangle frames while grabbed
+                        self.frame = self.frame + 1 if self.frame < dangle_hi else dangle_lo
+            else:
+                cap = a["frames"] - 1
+                while self.frame_clock >= dur and self.frame < cap:
+                    self.frame_clock -= dur
+                    self.frame += 1
+                if self.frame >= cap:
+                    self.enter_action(random.choice(REACT_POOL))
             return
 
         a = self.sheet.anim(self.state)
@@ -235,8 +308,10 @@ class Pet:
             if self.action != "sleep":
                 self.enter_action("sleep")
             return
-        if self.action == "sleep":
+        if self.action == "sleep" and not self.forced_sleep:
             self.enter_action("sit")
+            return
+        if self.forced_sleep:
             return
 
         # active behavior with dwell
@@ -258,8 +333,21 @@ class Pet:
                 self.gy += step * dy / dist
             self._clamp()
         elif self.action == "sit":
+            if not self._fidgeting and self._fidget_at and now >= self._fidget_at:
+                self._fidgeting = True
+                self.enter("fidget")
+                fa = self.sheet.anim("fidget")
+                self._fidget_end = now + fa["frames"] / fa["fps"]
+            elif self._fidgeting and now >= self._fidget_end:
+                self._fidgeting = False
+                self.enter("idle")
+                self.frame = self._sit_pose_frame
+                self.hold = True
             if now - self.action_start >= self.sit_dur:
                 self.choose_next()
+        elif self.action in ("react_l", "react_r", "react_land"):
+            if now - self.action_start >= self.sit_dur:
+                self.enter_action("sit")
 
     # ---- rendering ------------------------------------------------------
     def draw(self, cr):
@@ -282,10 +370,12 @@ class Pet:
         cr.paint()
         cr.restore()
 
-        if self.action == "meow":
-            self._draw_meow_bubble(cr, dx + dw / 2, dy)
+        if self.state == "meow":
+            self._draw_bubble(cr, dx + dw / 2, dy, "meow~")
+        elif self.state in ("react_l", "react_r"):
+            self._draw_bubble(cr, dx + dw / 2, dy, "hsss!")
 
-    def _draw_meow_bubble(self, cr, head_x, head_top_y):
+    def _draw_bubble(self, cr, head_x, head_top_y, text):
         """Small speech-bubble sprite drawn on top, since the art pack has none."""
         bw, bh = 13 * SCALE, 9 * SCALE
         gap = max(2, SCALE // 2)
@@ -310,7 +400,6 @@ class Pet:
 
         cr.select_font_face("monospace", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
         cr.set_font_size(12 * SCALE / 4)
-        text = "meow~"
         ext = cr.text_extents(text)
         cr.move_to(bx + (bw - ext.width) / 2 - ext.x_bearing,
                    by + (bh - ext.height) / 2 - ext.y_bearing)
@@ -459,12 +548,20 @@ def main():
                 return
             cw, ch = pet.sheet.cw, pet.sheet.ch
             dw, dh = cw * SCALE, ch * SCALE
-            dx = max(0, round(pet.gx - dw / 2))
-            dy = max(0, round(pet.gy - dh))
-            rw = min(dw, pet.W - dx)
-            rh = min(dh, pet.H - dy)
+            dx = round(pet.gx - dw / 2)
+            dy = round(pet.gy - dh)
+            # tight click area: only the sprite's actual (non-transparent)
+            # pixels for the current state/frame, not the whole padded cell
+            frames = pet.sheet.bboxes.get(pet.state) or [(0, 0, cw, ch)]
+            bx0, by0, bx1, by1 = frames[min(pet.frame, len(frames) - 1)]
+            if pet.facing_left and pet.sheet.faces_right:
+                bx0, bx1 = cw - bx1, cw - bx0  # mirror to match the flipped draw
+            rx = max(0, round(dx + bx0 * SCALE))
+            ry = max(0, round(dy + by0 * SCALE))
+            rw = min(round((bx1 - bx0) * SCALE), pet.W - rx)
+            rh = min(round((by1 - by0) * SCALE), pet.H - ry)
             if rw > 0 and rh > 0:
-                rect = cairo.RectangleInt(int(dx), int(dy), int(rw), int(rh))
+                rect = cairo.RectangleInt(int(rx), int(ry), int(rw), int(rh))
                 surface.set_input_region(cairo.Region(rect))
 
         # single GestureDrag handles both: a short press-release (no real motion)
@@ -493,6 +590,8 @@ def main():
         def on_drag_end(gesture, offset_x, offset_y):
             if pet.dragging:
                 pet.end_drag()
+            elif pet.forced_sleep:
+                pet.wake()
             else:
                 pet.trigger_meow()
 
@@ -501,6 +600,14 @@ def main():
         drag.connect("drag-update", on_drag_update)
         drag.connect("drag-end", on_drag_end)
         area.add_controller(drag)
+
+        def on_right_click(gesture, n_press, x, y):
+            pet.force_sleep()
+
+        right_click = Gtk.GestureClick.new()
+        right_click.set_button(Gdk.BUTTON_SECONDARY)
+        right_click.connect("released", on_right_click)
+        area.add_controller(right_click)
 
         def tick():
             now = time.monotonic()
