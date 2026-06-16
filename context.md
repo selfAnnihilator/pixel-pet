@@ -1,6 +1,6 @@
 # Pixel Pet — Context
 
-> Living status doc. **Update after every successful change.** Last updated: 2026-06-16 (draggable pet)
+> Living status doc. **Update after every successful change.** Last updated: 2026-06-16 (sit after drop)
 
 ## ⚠️ Maintenance rule (read first)
 **This file MUST be updated after every successfully implemented change.** On each change:
@@ -38,10 +38,11 @@ niri 26.04, single output eDP-1 1920x1080, Wayland, Arch/cachyos.
 Working dir: `/home/abhi/code/pixel-pet` (now a git repo, initialized 2026-06-16).
 
 ### Sprite sheet truth (rows were mislabeled by auto-segmenter)
-cat.png 594x224, cell 66x28, 9 cols, 8 rows:
+cat.png 594x252, cell 66x28, 9 cols, 9 rows:
 - row0 `idle` — 6 **distinct sit poses** (NOT a loop; hold one frame)
 - row1 `walk` — side/horizontal walk (8)
-- row2 `sleep` — (9)
+- row2 `sleep` — (9) **unused now** — AFK plays `flop` (row8) instead; kept in
+  the sheet/manifest in case wanted again
 - row3 `walk_fd` — front-diagonal walk, ¾ toward viewer (6)
 - row4 `walk_front` — straight-down walk, facing viewer (4)
 - row5 `walk_back` — back walk, ¾ away (6)
@@ -51,7 +52,19 @@ cat.png 594x224, cell 66x28, 9 cols, 8 rows:
   user-supplied lavender/white sprite, not the gray source pack — background was a
   baked-in gray checkerboard, not real alpha, so it was chroma-keyed out by exact
   RGB match `(84,81,87)`/`(76,73,79)` before cropping/centering/bottom-aligning the
-  same way as other rows)
+  same way as other rows). Recolored lavender→gray after the fact (see below).
+- row8 `flop` — lounging/curled-up pose, 8 near-identical frames, loop (added;
+  sourced from the bottom row of a second user-supplied lavender icon sheet,
+  same chroma-key treatment as `drag`; now used for AFK instead of the old
+  `sleep` row — see Done entry below). Recolored lavender→gray too.
+- **Palette note:** both `drag`/`flop` source sprites came in a lavender/white
+  palette (different from the rest of the gray sheet), making the cat visibly
+  flash white on drag/AFK. Fixed by an exact-RGB recolor pass over rows 7-8
+  only, mapping each lavender color to its gray-palette counterpart:
+  `213,207,222→98,103,115` (body), `23,16,27→18,14,20` (outline),
+  `180,170,193→65,71,82` (shade), `148,127,125→154,135,126` (nose),
+  `192,107,155→202,113,159` / `213,142,191→223,148,195` (ear pink, two
+  shades). If more lavender-sourced rows get added later, reuse this mapping.
 - **No groom animation exists** in this pack.
 - Source pack has more unused rows (eat, yawn, wash, itch, hiss, paw attack, on
   hind legs, plus 3 sleep poses each L/R) in `assets/src/Free pack/cat 1.png` if
@@ -102,7 +115,15 @@ cat.png 594x224, cell 66x28, 9 cols, 8 rows:
       generic loop/hold frame-advance used by every other state. `loop` in
       `manifest.json`'s `drag` entry is unused by this path (kept `false` for
       clarity) — frame capping is computed from `frames // 2`, not the
-      manifest loop flag.
+      manifest loop flag. After the drop animation finishes it always
+      `enter_action("sit")` (normal `SIT_MIN..SIT_MAX` dwell) at the drop
+      spot, regardless of what it was doing before the grab — removed
+      `_pre_drag_action` entirely since it's no longer needed.
+- [x] **Flop sprite for AFK/sleep.** `Pet._ANIM["sleep"]` now points at the new
+      `flop` row instead of the old `sleep` row — `enter_action("sleep")`
+      (triggered by the swayidle AFK watcher) plays it as a normal looping
+      animation, no special-casing needed. Old `sleep` row/anim left in
+      `cat.png`/`manifest.json` untouched, just no longer referenced.
 
 ## To do / open
 - [ ] `assets/src/rest-block-reference.png` — stashed crop of the source pack's

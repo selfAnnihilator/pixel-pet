@@ -55,6 +55,12 @@
           "frames": 4,
           "fps": 6,
           "loop": false
+        },
+        "flop": {
+          "row": 8,
+          "frames": 8,
+          "fps": 2,
+          "loop": true
         }
       }
     },

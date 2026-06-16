@@ -77,7 +77,6 @@ class Pet:
         self.paused = False    # fullscreen app present: hide + freeze
         self._pre_meow_action = None  # action to resume once a meow finishes
         self.dragging = False
-        self._pre_drag_action = None  # action to resume once a drag ends
         self._drag_dx = self._drag_dy = 0.0
         self.W = self.H = 0
         self._last = time.monotonic()
@@ -104,7 +103,7 @@ class Pet:
         self.hold = False
 
     # non-walk action -> animation row (walk picks a directional row, see _walk_state)
-    _ANIM = {"sit": "idle", "sleep": "sleep"}
+    _ANIM = {"sit": "idle", "sleep": "flop"}
 
     def enter_action(self, name):
         self.action = name
@@ -177,8 +176,6 @@ class Pet:
         """Mouse-drag begins: freeze normal behavior, switch to the dangle sprite."""
         if self.paused:
             return
-        self._pre_drag_action = (self._pre_meow_action if self.action == "meow"
-                                  else self.action) or "sit"
         self.action = "drag"
         self.dragging = True
         self.action_start = time.monotonic()
@@ -196,7 +193,9 @@ class Pet:
 
         # dragging: animate the "drag" row up to its halfway frame and hold there
         # while held; on release (see end_drag) action becomes "drop" and we play
-        # out the remaining half once, then resume whatever was running before.
+        # out the remaining half once, then always settle into a sit (dwelling at
+        # the drop spot for a while) rather than resuming whatever was running
+        # before the grab.
         if self.action in ("drag", "drop"):
             a = self.sheet.anim("drag")
             half = max(1, a["frames"] // 2)
@@ -207,7 +206,7 @@ class Pet:
                 self.frame_clock -= dur
                 self.frame += 1
             if self.action == "drop" and self.frame >= cap:
-                self.enter_action(self._pre_drag_action or "sit")
+                self.enter_action("sit")
             return
 
         a = self.sheet.anim(self.state)
