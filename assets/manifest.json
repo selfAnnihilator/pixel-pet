@@ -1,0 +1,103 @@
+{
+  "pets": {
+    "cat": {
+      "sheet": "cat/cat.png",
+      "icon": "cat/icon.png",
+      "cellW": 66,
+      "cellH": 28,
+      "cols": 9,
+      "facesRight": true,
+      "anims": {
+        "idle": {
+          "row": 0,
+          "frames": 6,
+          "fps": 4,
+          "loop": true
+        },
+        "walk": {
+          "row": 1,
+          "frames": 8,
+          "fps": 10,
+          "loop": true
+        },
+        "sleep": {
+          "row": 2,
+          "frames": 9,
+          "fps": 4,
+          "loop": false
+        },
+        "walk_fd": {
+          "row": 3,
+          "frames": 6,
+          "fps": 8,
+          "loop": true
+        },
+        "walk_front": {
+          "row": 4,
+          "frames": 4,
+          "fps": 8,
+          "loop": true
+        },
+        "walk_back": {
+          "row": 5,
+          "frames": 6,
+          "fps": 8,
+          "loop": true
+        },
+        "meow": {
+          "row": 6,
+          "frames": 3,
+          "fps": 6,
+          "loop": false
+        }
+      }
+    },
+    "goldie": {
+      "sheet": "puppy/goldie.png",
+      "icon": "puppy/icon.png",
+      "cellW": 31,
+      "cellH": 29,
+      "cols": 4,
+      "facesRight": true,
+      "anims": {
+        "idle": {
+          "row": 0,
+          "frames": 4,
+          "fps": 3,
+          "loop": true
+        },
+        "walk": {
+          "row": 1,
+          "frames": 4,
+          "fps": 8,
+          "loop": true
+        },
+        "sleep": {
+          "row": 2,
+          "frames": 4,
+          "fps": 4,
+          "loop": false
+        },
+        "stretch": {
+          "row": 3,
+          "frames": 4,
+          "fps": 8,
+          "loop": false
+        },
+        "react": {
+          "row": 4,
+          "frames": 4,
+          "fps": 10,
+          "loop": false
+        },
+        "groom": {
+          "row": 5,
+          "frames": 4,
+          "fps": 4,
+          "loop": false
+        }
+      }
+    }
+  },
+  "defaultPet": "cat"
+}
