@@ -1,6 +1,6 @@
 # Pixel Pet — Context
 
-> Living status doc. **Update after every successful change.** Last updated: 2026-06-16 (random react-on-drop)
+> Living status doc. **Update after every successful change.** Last updated: 2026-06-17 (tracking pet: draggable + fullscreen hide, per-pet scale)
 
 ## ⚠️ Maintenance rule (read first)
 **This file MUST be updated after every successfully implemented change.** On each change:
@@ -129,6 +129,31 @@ widest row):
   alpha-band detection (no fixed grid; each row's frames are tightly trimmed).
 
 ## Done
+- [x] **Tracking pet is draggable + hides on fullscreen, per-pet scale.**
+      - **Drag:** input region restored to the cat's tight alpha bbox (current frame),
+        rest of screen click-through. `Gtk.GestureDrag` past `DRAG_THRESH` (6px) grabs
+        the cat, follows the cursor offset-locked until release. While `pet.dragging`,
+        `update()` holds the straight frame and skips tracking.
+      - **Fullscreen:** `start_fullscreen_watch` re-enabled (niri focused window_size ==
+        output logical size → `pet.paused`, window hidden + tick frozen; un-fullscreen →
+        reappears, click-through re-applied).
+      - **Per-pet scale:** `Sheet.scale = pet_def["scale"]` (fallback `PET_SCALE`); live
+        methods (`draw`/`_clamp`/`_cat_center`/input region) use `sheet.scale`. `catbone`
+        set to `scale: 2` → 128px (was 256px at default ×4). Tweak in manifest.
+- [x] **Mouse-tracking pet (`catbone`)** — new default pet. Cat looks toward the
+      cursor. Sprite sheet `assets/catbone/track.png` (576×64 = nine 64×64 frames):
+      frame 0 straight, frames 1–8 = compass directions starting at up (N) clockwise
+      (N, NE, E, SE, S, SW, W, NW). `MouseTracker` reads relative motion from evdev
+      pointer devices (`/dev/input/by-path/*-event-mouse`, needs `input` group),
+      integrates it into a virtual cursor clamped to the output (re-syncs at edges),
+      and flags "moving" for `MOVE_TIMEOUT` after the last motion. `Pet.update()` maps
+      the cat→cursor angle (`atan2(dx,-dy)`, clockwise-from-north, 45° sectors) to a
+      frame; straight when idle or cursor within `DEADZONE` of the cat. Surface stays
+      fully click-through (no GTK pointer grab) — niri exposes no cursor-position API,
+      hence evdev. Recommended `PET_SCALE=2` (64px native). Manifest `defaultPet=catbone`.
+- [x] **Stripped to inert shell for new sprite work**: actions/auto-move/AFK/drag/
+      right-click all disabled (now superseded by tracking). Old action code left in
+      `Pet` (dead) for reference; gestures + AFK/fullscreen watches stay disabled.
 - [x] Pivoted Electron → GTK4 layer-shell (true borderless transparent screen overlay).
 - [x] Single sprite, click-through, workspace-independent, spans whole output.
 - [x] Behavior state machine: walk ↔ sit with dwell (hold poses, no spam).

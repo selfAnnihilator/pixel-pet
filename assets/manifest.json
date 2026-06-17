@@ -124,6 +124,23 @@
         }
       }
     },
+    "catbone": {
+      "sheet": "catbone/track.png",
+      "icon": "cat/icon.png",
+      "cellW": 64,
+      "cellH": 64,
+      "cols": 9,
+      "scale": 1.5,
+      "facesRight": true,
+      "anims": {
+        "track": {
+          "row": 0,
+          "frames": 9,
+          "fps": 1,
+          "loop": false
+        }
+      }
+    },
     "goldie": {
       "sheet": "puppy/goldie.png",
       "icon": "puppy/icon.png",
@@ -171,5 +188,5 @@
       }
     }
   },
-  "defaultPet": "cat"
+  "defaultPet": "catbone"
 }
