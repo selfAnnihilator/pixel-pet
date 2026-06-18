@@ -141,6 +141,23 @@
         }
       }
     },
+    "catbone_drag": {
+      "sheet": "catbone/drag.png",
+      "icon": "cat/icon.png",
+      "cellW": 128,
+      "cellH": 128,
+      "cols": 4,
+      "scale": 1.5,
+      "facesRight": true,
+      "anims": {
+        "drag": {
+          "row": 0,
+          "frames": 4,
+          "fps": 8,
+          "loop": true
+        }
+      }
+    },
     "goldie": {
       "sheet": "puppy/goldie.png",
       "icon": "puppy/icon.png",

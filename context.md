@@ -1,6 +1,6 @@
 # Pixel Pet — Context
 
-> Living status doc. **Update after every successful change.** Last updated: 2026-06-17 (tracking pet: draggable + fullscreen hide, per-pet scale)
+> Living status doc. **Update after every successful change.** Last updated: 2026-06-18 (tracking pet: drag/wobble held animation)
 
 ## ⚠️ Maintenance rule (read first)
 **This file MUST be updated after every successfully implemented change.** On each change:
@@ -129,6 +129,32 @@ widest row):
   alpha-band detection (no fixed grid; each row's frames are tightly trimmed).
 
 ## Done
+- [x] **Held/drag wobble animation (`catbone`).** Grabbing the tracking cat now
+      swaps it to a dedicated stretched "held" sprite that wobbles for the whole
+      duration of the hold, returning to cursor-tracking on release. Art:
+      `assets/catbone/drag.png` (512×128 = four 128×128 frames: 0=sit/unused,
+      1=wobble-left, 2=no-wobble/middle, 3=wobble-right), copied from
+      `~/Documents/sprites/cat_bone/cat_drag.png`. Registered as a **companion pet
+      entry** `catbone_drag` in `manifest.json` (its own 128px cells + `scale: 1.5`,
+      same on-screen size as the 64px tracking sheet since the cat body is the same
+      ~52px native width — held pose is just *taller*, the stretch); it's never the
+      active pet (`defaultPet` stays `catbone`), only referenced as the drag sheet.
+      `Pet.drag_sheet = self.sheets.get(name + "_drag")`; new `Pet._active()` returns
+      `(drag_sheet, "drag")` while dragging else `(sheet, state)`, used by `draw()`
+      and `update_input_region()` so the bigger cell + tighter held bbox track
+      correctly. `Pet.update()`'s drag branch advances `_wob_clock` by `dt` and steps
+      `_wob_i` through `WOBBLE_SEQ = [2,1,2,3]` (middle→left→middle→right ping-pong)
+      at `WOBBLE_FPS = 8`; the grab handler resets `_wob_i/_wob_clock = 0` so each
+      grab starts on the no-wobble frame. **Motion-gated:** wobble only runs while
+      the held cat is actually being moved — `on_drag_update` stamps `_drag_moved_at`
+      on real position change; the drag branch settles on the no-wobble middle frame
+      (resetting the cycle) once no move within `WOBBLE_MOVE_TIMEOUT = 0.12s`. Falls
+      back to the old straight-hold if no drag sheet present. **Pick-up on press:**
+      `dragging` now engages in `on_drag_begin` (not after a `DRAG_THRESH` move), so
+      press-and-hold immediately shows the held no-wobble stand; `DRAG_THRESH`
+      removed (no click action remains to disambiguate). Verified headless: sequence starts at frame 2 then
+      ping-pongs as expected. Grab has a ~10px horizontal / ~1.5px vertical pop from
+      the 64→128 cell change (acceptable "snap into hold").
 - [x] **Tracking pet is draggable + hides on fullscreen, per-pet scale.**
       - **Drag:** input region restored to the cat's tight alpha bbox (current frame),
         rest of screen click-through. `Gtk.GestureDrag` past `DRAG_THRESH` (6px) grabs

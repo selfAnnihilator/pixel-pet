@@ -46,6 +46,13 @@ DEADZONE = 24         # cursor within this many px of the cat center -> look str
 # starting at up (N) and going clockwise. Index by 45deg sector.
 TRACK_DIR_FRAMES = [1, 2, 3, 4, 5, 6, 7, 8]  # N, NE, E, SE, S, SW, W, NW
 
+# Drag/wobble tuning. The drag sheet frames are 0=sit, 1=wobble-left,
+# 2=no-wobble/middle, 3=wobble-right. While held we ping-pong middle<->sides;
+# starting at index 0 of the sequence (frame 2) means "no wobble at first".
+WOBBLE_SEQ = [2, 1, 2, 3]   # middle, left, middle, right (loops)
+WOBBLE_FPS = 8
+WOBBLE_MOVE_TIMEOUT = 0.12  # wobble only while the held cat is still being moved
+
 
 class MouseTracker:
     """Reads relative motion from evdev pointer devices and integrates it into a
@@ -174,6 +181,7 @@ class Pet:
         self.sheets = {n: Sheet(d) for n, d in manifest["pets"].items()}
         self.name = pet_name if pet_name in self.sheets else manifest["defaultPet"]
         self.sheet = self.sheets[self.name]
+        self.drag_sheet = self.sheets.get(self.name + "_drag")  # held-pose sheet
         self.tracker = tracker
 
         self.gx = 0.0          # ground anchor x (feet, screen px)
@@ -194,6 +202,9 @@ class Pet:
         self._pre_meow_action = None  # action to resume once a meow finishes
         self.dragging = False
         self._drag_dx = self._drag_dy = 0.0
+        self._wob_clock = 0.0          # wobble frame timer while dragging
+        self._wob_i = 0                # index into WOBBLE_SEQ
+        self._drag_moved_at = 0.0      # last time the held cat actually moved
         self._fidgeting = False        # mid-sit head-turn/blink fidget playing
         self._fidget_at = None         # monotonic time the next fidget should start
         self._fidget_end = 0.0
@@ -344,10 +355,34 @@ class Pet:
         dh = self.sheet.ch * self.sheet.scale
         return self.gx, self.gy - dh / 2.0
 
+    def _active(self):
+        """(sheet, state) currently being shown: the held-pose sheet while
+        dragging, otherwise the normal tracking sheet."""
+        if self.dragging and self.drag_sheet is not None:
+            return self.drag_sheet, "drag"
+        return self.sheet, self.state
+
     def update(self, dt):
-        # Being dragged: hold the straight pose and let the gesture move the cat.
+        # Being dragged: play the wobble. Start on the no-wobble frame, then
+        # ping-pong middle<->left<->right for the whole duration of the hold.
         if self.dragging:
-            self.frame = 0
+            if self.drag_sheet is None:
+                self.frame = 0
+                return
+            moving = (time.monotonic() - self._drag_moved_at) < WOBBLE_MOVE_TIMEOUT
+            if not moving:
+                # held still: settle on the no-wobble frame, ready to wobble
+                # again from the middle on the next move
+                self._wob_i = 0
+                self._wob_clock = 0.0
+                self.frame = WOBBLE_SEQ[0]
+                return
+            self._wob_clock += dt
+            step = 1.0 / WOBBLE_FPS
+            while self._wob_clock >= step:
+                self._wob_clock -= step
+                self._wob_i = (self._wob_i + 1) % len(WOBBLE_SEQ)
+            self.frame = WOBBLE_SEQ[self._wob_i]
             return
         # Look toward the (virtual) cursor. Straight ahead when idle or when the
         # cursor sits on top of the cat; otherwise pick the matching compass frame.
@@ -367,10 +402,11 @@ class Pet:
 
     # ---- rendering ------------------------------------------------------
     def draw(self, cr):
-        frames = self.sheet.frames[self.state]
+        sheet, state = self._active()
+        frames = sheet.frames[state]
         pb = frames[min(self.frame, len(frames) - 1)]
-        s = self.sheet.scale
-        dw, dh = self.sheet.cw * s, self.sheet.ch * s
+        s = sheet.scale
+        dw, dh = sheet.cw * s, sheet.ch * s
         dx = round(self.gx - dw / 2)
         dy = round(self.gy - dh)
         cr.save()
@@ -559,12 +595,13 @@ def main():
             surface = win.get_surface()
             if surface is None:
                 return
-            cw, ch = pet.sheet.cw, pet.sheet.ch
-            s = pet.sheet.scale
+            sheet, state = pet._active()
+            cw, ch = sheet.cw, sheet.ch
+            s = sheet.scale
             dw, dh = cw * s, ch * s
             dx = round(pet.gx - dw / 2)
             dy = round(pet.gy - dh)
-            frames = pet.sheet.bboxes.get(pet.state) or [(0, 0, cw, ch)]
+            frames = sheet.bboxes.get(state) or [(0, 0, cw, ch)]
             bx0, by0, bx1, by1 = frames[min(pet.frame, len(frames) - 1)]
             rx = max(0, round(dx + bx0 * s))
             ry = max(0, round(dy + by0 * s))
@@ -577,23 +614,26 @@ def main():
         # GestureDrag on the cat's input region: press + move past DRAG_THRESH px
         # grabs the cat and it follows the cursor (offset-locked to the grab point)
         # until release. A plain click (no real motion) does nothing.
-        DRAG_THRESH = 6
-
         def on_drag_begin(gesture, start_x, start_y):
             gesture.set_state(Gtk.EventSequenceState.CLAIMED)
+            # Pressing the cat picks it up immediately: show the held no-wobble
+            # stand right away, even before any movement.
+            pet.dragging = True
+            pet._wob_i = 0          # start each grab on the no-wobble frame
+            pet._wob_clock = 0.0
+            pet._drag_moved_at = 0.0
+            pet._drag_dx = pet.gx - start_x
+            pet._drag_dy = pet.gy - start_y
 
         def on_drag_update(gesture, offset_x, offset_y):
             ok, start_x, start_y = gesture.get_start_point()
             if not ok:
                 return
-            if not pet.dragging:
-                if (offset_x ** 2 + offset_y ** 2) ** 0.5 < DRAG_THRESH:
-                    return
-                pet.dragging = True
-                pet._drag_dx = pet.gx - start_x
-                pet._drag_dy = pet.gy - start_y
-            pet.gx = start_x + offset_x + pet._drag_dx
-            pet.gy = start_y + offset_y + pet._drag_dy
+            nx = start_x + offset_x + pet._drag_dx
+            ny = start_y + offset_y + pet._drag_dy
+            if nx != pet.gx or ny != pet.gy:
+                pet._drag_moved_at = time.monotonic()
+            pet.gx, pet.gy = nx, ny
             pet._clamp()
             area.queue_draw()
 
