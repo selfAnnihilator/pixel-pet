@@ -53,6 +53,10 @@ WOBBLE_SEQ = [2, 1, 2, 3]   # middle, left, middle, right (loops)
 WOBBLE_FPS = 8
 WOBBLE_MOVE_TIMEOUT = 0.12  # wobble only while the held cat is still being moved
 
+# Keyboard typing tuning. Each physical keydown alternates the pressed paw; the
+# pose remains pressed while any key stays held, then frame 0 gets a quiet hold.
+TYPING_HOLD_DUR = 2.0
+
 
 class MouseTracker:
     """Reads relative motion from evdev pointer devices and integrates it into a
@@ -127,6 +131,79 @@ class MouseTracker:
             self.last_motion = time.monotonic()
 
 
+class KeyboardTracker:
+    """Reads global keyboard presses from evdev without taking keyboard focus.
+
+    Every physical keydown counts, including modifiers. Kernel-generated repeat
+    events do not create new paw presses: they keep the current held-key pose.
+    Devices are restricted to keyboard symlinks so mouse buttons (also reported
+    as EV_KEY) cannot trigger typing.
+    """
+
+    _EV_SIZE = struct.calcsize("llHHi")
+    _EV_KEY = 0x01
+    _KEY_DOWN = 1
+
+    def __init__(self):
+        self.press_serial = 0
+        self.last_press = 0.0
+        self.last_release = 0.0
+        self.held_keys = set()
+        self._fds = []
+
+    def any_held(self):
+        return bool(self.held_keys)
+
+    def _open_devices(self):
+        paths = sorted(set(
+            glob.glob("/dev/input/by-path/*-event-kbd")
+            + glob.glob("/dev/input/by-id/*-event-kbd")
+        ))
+        opened = set()
+        for path in paths:
+            try:
+                real = os.path.realpath(path)
+                if real in opened:
+                    continue
+                self._fds.append(os.open(path, os.O_RDONLY | os.O_NONBLOCK))
+                opened.add(real)
+            except OSError:
+                pass
+        return bool(self._fds)
+
+    def start(self):
+        if not self._open_devices():
+            print("pet: no readable keyboard devices in /dev/input "
+                  "(need 'input' group); typing disabled", file=sys.stderr)
+            return
+        threading.Thread(target=self._reader, daemon=True).start()
+
+    def _reader(self):
+        while True:
+            ready, _, _ = select.select(self._fds, [], [], 0.5)
+            for fd in ready:
+                try:
+                    buf = os.read(fd, self._EV_SIZE * 64)
+                except OSError:
+                    continue
+                self._consume(buf)
+
+    def _consume(self, buf):
+        n = len(buf) // self._EV_SIZE
+        for i in range(n):
+            off = i * self._EV_SIZE
+            _, _, etype, code, value = struct.unpack_from("llHHi", buf, off)
+            if etype != self._EV_KEY:
+                continue
+            if value == self._KEY_DOWN and code not in self.held_keys:
+                self.held_keys.add(code)
+                self.last_press = time.monotonic()
+                self.press_serial += 1
+            elif value == 0 and code in self.held_keys:
+                self.held_keys.remove(code)
+                self.last_release = time.monotonic()
+
+
 def _alpha_bbox(pixbuf):
     """Tight (x0, y0, x1, y1) box around the non-transparent pixels of a cell,
     in cell-local pixel coords (x1/y1 exclusive). Falls back to the full cell
@@ -176,13 +253,17 @@ class Sheet:
 
 
 class Pet:
-    def __init__(self, manifest, pet_name, tracker=None):
+    def __init__(self, manifest, pet_name, tracker=None, keyboard=None):
         self.manifest = manifest
-        self.sheets = {n: Sheet(d) for n, d in manifest["pets"].items()}
-        self.name = pet_name if pet_name in self.sheets else manifest["defaultPet"]
-        self.sheet = self.sheets[self.name]
-        self.drag_sheet = self.sheets.get(self.name + "_drag")  # held-pose sheet
+        pet_defs = manifest["pets"]
+        self.name = pet_name if pet_name in pet_defs else manifest["defaultPet"]
+        self.sheet = Sheet(pet_defs[self.name])
+        drag_def = pet_defs.get(self.name + "_drag")
+        type_def = pet_defs.get(self.name + "_type")
+        self.drag_sheet = Sheet(drag_def) if drag_def is not None else None
+        self.type_sheet = Sheet(type_def) if type_def is not None else None
         self.tracker = tracker
+        self.keyboard = keyboard
 
         self.gx = 0.0          # ground anchor x (feet, screen px)
         self.gy = 0.0          # ground anchor y (feet, screen px)
@@ -205,6 +286,11 @@ class Pet:
         self._wob_clock = 0.0          # wobble frame timer while dragging
         self._wob_i = 0                # index into WOBBLE_SEQ
         self._drag_moved_at = 0.0      # last time the held cat actually moved
+        self._typing_visible = False   # typing sheet currently wins arbitration
+        self._typing_until = 0.0       # end of the post-release Typing Hold
+        self._typing_frame = 0
+        self._type_next_left = True
+        self._seen_key_serial = keyboard.press_serial if keyboard is not None else 0
         self._fidgeting = False        # mid-sit head-turn/blink fidget playing
         self._fidget_at = None         # monotonic time the next fidget should start
         self._fidget_end = 0.0
@@ -357,15 +443,71 @@ class Pet:
 
     def _active(self):
         """(sheet, state) currently being shown: the held-pose sheet while
-        dragging, otherwise the normal tracking sheet."""
+        dragging, then the typing companion sheet, otherwise normal tracking."""
         if self.dragging and self.drag_sheet is not None:
             return self.drag_sheet, "drag"
+        if self._typing_visible and self.type_sheet is not None:
+            return self.type_sheet, "type"
         return self.sheet, self.state
+
+    def cancel_typing(self):
+        """Consume pending typing state so it cannot reappear after an override."""
+        if self.keyboard is not None:
+            self._seen_key_serial = self.keyboard.press_serial
+        self._typing_visible = False
+        self._typing_until = 0.0
+        self._typing_frame = 0
+
+    def _update_typing(self, now):
+        """Apply key events and return True while typing owns the visible sprite."""
+        keyboard = self.keyboard
+        if keyboard is None or self.type_sheet is None:
+            self._typing_visible = False
+            return False
+
+        serial = keyboard.press_serial
+        if serial != self._seen_key_serial:
+            count = serial - self._seen_key_serial
+            self._seen_key_serial = serial
+            for _ in range(max(0, count)):
+                self._typing_frame = 1 if self._type_next_left else 3
+                self._type_next_left = not self._type_next_left
+            self._typing_until = 0.0
+            self._typing_visible = True
+
+        if not self._typing_visible:
+            return False
+
+        # Any held key freezes the current paw-down pose. A new physical keydown
+        # changes paws above; kernel repeats leave this frame untouched.
+        if keyboard.any_held():
+            self.frame = self._typing_frame
+            return True
+
+        # Final key release ends the press immediately and starts Typing Hold.
+        if self._typing_frame != 0:
+            self._typing_frame = 0
+            self._typing_until = keyboard.last_release + TYPING_HOLD_DUR
+
+        if now >= self._typing_until:
+            self._typing_visible = False
+            self._typing_frame = 0
+            return False
+
+        # Pointer activity newer than the final release consumes Typing Hold.
+        if (self.tracker is not None
+                and self.tracker.last_motion > keyboard.last_release):
+            self.cancel_typing()
+            return False
+
+        self.frame = 0
+        return True
 
     def update(self, dt):
         # Being dragged: play the wobble. Start on the no-wobble frame, then
         # ping-pong middle<->left<->right for the whole duration of the hold.
         if self.dragging:
+            self.cancel_typing()
             if self.drag_sheet is None:
                 self.frame = 0
                 return
@@ -383,6 +525,9 @@ class Pet:
                 self._wob_clock -= step
                 self._wob_i = (self._wob_i + 1) % len(WOBBLE_SEQ)
             self.frame = WOBBLE_SEQ[self._wob_i]
+            return
+        now = time.monotonic()
+        if self._update_typing(now):
             return
         # Look toward the (virtual) cursor. Straight ahead when idle or when the
         # cursor sits on top of the cat; otherwise pick the matching compass frame.
@@ -522,6 +667,7 @@ def start_fullscreen_watch(pet, win, set_clickthrough):
             if isinstance(ws, list) and len(ws) == 2:
                 fs = (ws[0], ws[1]) == size
         if fs and not pet.paused:
+            pet.cancel_typing()
             pet.paused = True
             win.set_visible(False)
         elif not fs and pet.paused:
@@ -545,8 +691,10 @@ def main():
     if pet_name is None:
         pet_name = manifest["defaultPet"]
     tracker = MouseTracker()
-    pet = Pet(manifest, pet_name, tracker)
+    keyboard = KeyboardTracker()
+    pet = Pet(manifest, pet_name, tracker, keyboard)
     tracker.start()
+    keyboard.start()
 
     app = Gtk.Application(application_id="com.abhi.pixelpet")
 
@@ -618,6 +766,7 @@ def main():
             gesture.set_state(Gtk.EventSequenceState.CLAIMED)
             # Pressing the cat picks it up immediately: show the held no-wobble
             # stand right away, even before any movement.
+            pet.cancel_typing()
             pet.dragging = True
             pet._wob_i = 0          # start each grab on the no-wobble frame
             pet._wob_clock = 0.0
@@ -638,6 +787,7 @@ def main():
             area.queue_draw()
 
         def on_drag_end(gesture, offset_x, offset_y):
+            pet.cancel_typing()  # discard every key observed during this drag
             pet.dragging = False
 
         drag = Gtk.GestureDrag.new()
@@ -649,6 +799,7 @@ def main():
         def tick():
             now = time.monotonic()
             if pet.paused:        # fullscreen app: freeze, skip clock + redraw
+                pet.cancel_typing()  # discard keys pressed while hidden
                 pet._last = now
                 return True
             dt = min(0.05, now - pet._last)

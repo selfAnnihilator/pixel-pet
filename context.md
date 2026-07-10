@@ -1,6 +1,6 @@
 # Pixel Pet — Context
 
-> Living status doc. **Update after every successful change.** Last updated: 2026-06-18 (tracking pet: drag/wobble held animation)
+> Living status doc. **Update after every successful change.** Last updated: 2026-07-10 (catbone global typing behavior)
 
 ## ⚠️ Maintenance rule (read first)
 **This file MUST be updated after every successfully implemented change.** On each change:
@@ -21,21 +21,29 @@ workspace-independent. Roams in 2D, sits, sleeps when you're away.
   full-output. Click-through everywhere except the pet's own bbox (input region
   shrunk to that rect each tick) so the cat itself is clickable while the rest
   of the screen still passes clicks through. Pixel-art scaled with
-  `FILTER_NEAREST`. A single `Gtk.GestureDrag` on the drawing area distinguishes
-  click vs drag: press+release under `DRAG_THRESH` (6px) = `pet.trigger_meow()`;
-  crossing that threshold = `pet.start_drag()`, which freezes the state machine
-  and follows the cursor (offset-locked to where it was grabbed) until release
-  (`pet.end_drag()` resumes whatever action was active before, same pattern as
-  the meow freeze/resume).
+  `FILTER_NEAREST`. Raw evdev readers observe global relative pointer motion and
+  keyboard presses without focusing the overlay; access requires membership in
+  the `input` group. `Gtk.GestureDrag` immediately switches to the held companion
+  sheet and follows the pointer until release. Only the active pet sheet and its
+  `_drag` / `_type` companion sheets are loaded; dormant future pet definitions
+  do not affect startup.
 - **`run-pet.sh`** — launcher. Sets `LD_PRELOAD=libgtk4-layer-shell.so` (must load
   before libwayland) then runs `pet.py`.
-- **`assets/manifest.json` + `assets/cat/cat.png`** — sprite sheet + metadata.
+- **`assets/manifest.json` + `assets/catbone/*.png`** — active tracking, drag,
+  typing companion sheets + metadata.
 - Electron build (`src/`, `electron-builder.yml`, etc.) is **dead/superseded** —
   kept for now, pending delete decision.
 
 ### Environment
 niri 26.04, single output eDP-1 1920x1080, Wayland, Arch/cachyos.
 Working dir: `/home/abhi/code/pixel-pet` (now a git repo, initialized 2026-06-16).
+
+### Catbone companion sheets
+- `track.png`: 576×64, nine 64×64 pointer-direction frames, scale 1.5.
+- `drag.png`: 512×128, four 128×128 held/wobble frames, scale 1.5.
+- `type.png`: 512×128, four 128×128 frames: 0=ready/hold, 1=left key,
+  2=neutral transition, 3=right key. Scale 0.75 keeps its ~105px opaque art
+  visually aligned with tracking art's ~52px opaque width.
 
 ### Sprite sheet truth (rows were mislabeled by auto-segmenter)
 cat.png 726x308, cell 66x28, 11 rows (most rows 9 cols, row9 `fidget` 11 cols —
@@ -129,6 +137,19 @@ widest row):
   alpha-band detection (no fixed grid; each row's frames are tightly trimmed).
 
 ## Done
+- [x] **Global keyboard-driven typing (`catbone`).** `KeyboardTracker` reads every
+      physical evdev keydown and release from `*-event-kbd` devices; keyboard-only
+      discovery prevents mouse buttons from masquerading as typing. Each physical
+      keydown alternates `catbone_type` frame 1/3. While any key remains down, that
+      pressed-paw frame is frozen; automatic repeats do not switch paws. Releasing
+      the final held key returns to frame 0 and starts a 2s Typing Hold. Arbitration:
+      fullscreen hide > drag > active paw press > newer pointer motion > Typing
+      Hold > tracking sit. Pointer motion after release consumes the hold;
+      drag/fullscreen discard observed keypresses so typing never appears later as
+      a stale queued action. Headless simulations cover key parsing, held-pose
+      persistence, left/right alternation, hold expiry, pointer interruption, and
+      drag cancellation. Active-sheet-only loading also avoids startup failure
+      from dormant manifest entries whose assets are not present yet.
 - [x] **Held/drag wobble animation (`catbone`).** Grabbing the tracking cat now
       swaps it to a dedicated stretched "held" sprite that wobbles for the whole
       duration of the hold, returning to cursor-tracking on release. Art:

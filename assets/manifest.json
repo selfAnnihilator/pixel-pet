@@ -158,6 +158,23 @@
         }
       }
     },
+    "catbone_type": {
+      "sheet": "catbone/type.png",
+      "icon": "cat/icon.png",
+      "cellW": 128,
+      "cellH": 128,
+      "cols": 4,
+      "scale": 0.75,
+      "facesRight": true,
+      "anims": {
+        "type": {
+          "row": 0,
+          "frames": 4,
+          "fps": 6,
+          "loop": true
+        }
+      }
+    },
     "goldie": {
       "sheet": "puppy/goldie.png",
       "icon": "puppy/icon.png",
