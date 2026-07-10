@@ -23,3 +23,19 @@ _Avoid_: Idle animation, default state
 **Interaction Priority**:
 The ordering that decides which visible pet behavior wins when user activities overlap: hiding, dragging, Typing Activity, pointer tracking, Typing Hold, then normal sitting. Lower-priority activity observed during hiding or dragging is discarded rather than queued.
 _Avoid_: State override, animation priority
+
+**Pet Controller**:
+The settings surface used to preview, configure, pause, reset, or quit the desktop companion. Hiding the controller does not stop the companion.
+_Avoid_: Dashboard, control panel, launcher
+
+**Live Setting**:
+A reversible preference whose saved value and visible effect update together as soon as the user changes it.
+_Avoid_: Option, pending change
+
+**Pet Preview**:
+The controller's representation of the active companion and its current behavior.
+_Avoid_: Thumbnail, avatar
+
+**Background Mode**:
+A launch mode that starts the companion without initially showing the Pet Controller.
+_Avoid_: Headless mode, minimized mode

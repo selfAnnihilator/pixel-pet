@@ -1,6 +1,6 @@
 # Pixel Pet — Context
 
-> Living status doc. **Update after every successful change.** Last updated: 2026-07-10 (catbone global typing behavior)
+> Living status doc. **Update after every successful change.** Last updated: 2026-07-10 (GTK Pet Controller and persistent live settings)
 
 ## ⚠️ Maintenance rule (read first)
 **This file MUST be updated after every successfully implemented change.** On each change:
@@ -28,7 +28,14 @@ workspace-independent. Roams in 2D, sits, sleeps when you're away.
   `_drag` / `_type` companion sheets are loaded; dormant future pet definitions
   do not affect startup.
 - **`run-pet.sh`** — launcher. Sets `LD_PRELOAD=libgtk4-layer-shell.so` (must load
-  before libwayland) then runs `pet.py`.
+  before libwayland) then runs `pet.py`; default launch opens the controller and
+  `--background` starts only the companion.
+- **`pet_controller.py`** — production GTK4/Libadwaita settings surface with a
+  live pixel preview, responsive split/stack layout, permission diagnostics,
+  live settings controls, pause/reset/default actions, and explicit quit.
+- **`pet_settings.py`** — validated JSON settings in the XDG config directory,
+  atomic writes with rollback, normalized screen position, and owned XDG
+  autostart entry management.
 - **`assets/manifest.json` + `assets/catbone/*.png`** — active tracking, drag,
   typing companion sheets + metadata.
 - Electron build (`src/`, `electron-builder.yml`, etc.) is **dead/superseded** —
@@ -137,6 +144,22 @@ widest row):
   alpha-band detection (no fixed grid; each row's frames are tightly trimmed).
 
 ## Done
+- [x] **GTK Pet Controller + persistent live settings.** A single-instance
+      `Adw.Application` now owns both the layer-shell overlay and a normal
+      760×560 responsive settings window. First launch shows the controller;
+      closing it hides only the controller, a later launch reopens the existing
+      instance, `--background` supports quiet autostart, and **Quit Pixel Pet**
+      stops both. Direction A / “Quiet Desk Split” keeps a crisp live Catbone
+      preview left and native grouped controls right. Live settings: shared
+      75–200% size multiplier across all companion sheets, pointer/typing
+      toggles, 0–5s Typing Hold, pause/resume, normalized position persistence,
+      reset position, XDG launch-at-login, and confirmed restore defaults.
+      Settings save atomically to `$XDG_CONFIG_HOME/pixel-pet/settings.json` and
+      rollback runtime/UI state on write failure. Missing evdev access disables
+      affected controls and exposes Copy setup command + Recheck; no in-app sudo.
+      Verified Python compile, settings normalization/rollback, autostart
+      create/remove, live Pet setting propagation, background startup, normal
+      controller startup, and second-launch controller reactivation.
 - [x] **Global keyboard-driven typing (`catbone`).** `KeyboardTracker` reads every
       physical evdev keydown and release from `*-event-kbd` devices; keyboard-only
       discovery prevents mouse buttons from masquerading as typing. Each physical
@@ -392,11 +415,12 @@ widest row):
 - [ ] README: document behavior model + `PET_IDLE_SEC`, swayidle/niri optional deps.
 - [ ] Goldie pet: directional walk rows not mapped (only cat has `walk_fd/front/back`)
       — falls back to side walk. Map if Goldie is to be used.
-- [ ] Autostart (niri spawn-at-startup) — not set up.
 - [ ] Tune walk speed / sit durations / diagonal thresholds after live observation.
 
 ## Tuning knobs
-- `PET_SCALE` (env, default 4), `PET_IDLE_SEC` (env, default 180).
+- Pet Controller: size 75–200%, Typing Hold 0–5s, pointer/typing toggles.
+- Persistent config: `$XDG_CONFIG_HOME/pixel-pet/settings.json`.
+- Legacy fallback: `PET_SCALE` (env, default 4), `PET_IDLE_SEC` (env, default 180).
 - `SIT_MIN/SIT_MAX` (5–12s), `WALK_MIN` (2.5s) in `pet.py`.
 
 ## Gotchas
