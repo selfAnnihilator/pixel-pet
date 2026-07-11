@@ -21,6 +21,8 @@ class SettingsStoreTests(unittest.TestCase):
     def test_normalizes_and_persists_live_settings(self):
         store = pet_settings.SettingsStore()
         self.assertTrue(store.first_run)
+        self.assertTrue(store.get("petting_reactions"))
+        self.assertFalse(store.update("petting_reactions", False))
         self.assertEqual(store.update("size_percent", 138), 150)
         self.assertEqual(store.update("typing_hold_seconds", 9), 5)
         self.assertEqual(

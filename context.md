@@ -1,6 +1,6 @@
 # Pixel Pet — Context
 
-> Living status doc. **Update after every successful change.** Last updated: 2026-07-10 (GTK Pet Controller and persistent live settings)
+> Living status doc. **Update after every successful change.** Last updated: 2026-07-11 (Catbone petting and heart sprite assets)
 
 ## ⚠️ Maintenance rule (read first)
 **This file MUST be updated after every successfully implemented change.** On each change:
@@ -51,6 +51,11 @@ Working dir: `/home/abhi/code/pixel-pet` (now a git repo, initialized 2026-06-16
 - `type.png`: 512×128, four 128×128 frames: 0=ready/hold, 1=left key,
   2=neutral transition, 3=right key. Scale 0.75 keeps its ~105px opaque art
   visually aligned with tracking art's ~52px opaque width.
+- `pet.png`: 192×64, three 64×64 closed-eye frames derived from the forward
+  tracking pose: 0=relaxed, 1=one-pixel left wiggle, 2=one-pixel right wiggle.
+  Frames 1/2 are selected from Petting Stroke direction; feet remain anchored.
+- `heart.png`: transparent 7×7 solid-red Petting Heart used as a separate
+  overlay effect rather than baked into Petting Pose frames.
 
 ### Sprite sheet truth (rows were mislabeled by auto-segmenter)
 cat.png 726x308, cell 66x28, 11 rows (most rows 9 cols, row9 `fidget` 11 cols —
@@ -144,6 +149,12 @@ widest row):
   alpha-band detection (no fixed grid; each row's frames are tightly trimmed).
 
 ## Done
+- [x] **Catbone Petting Pose + Petting Heart assets.** Added
+      `assets/catbone/pet.png` (three 64×64 relaxed/left/right frames) and
+      `assets/catbone/heart.png` (7×7). Petting Pose preserves the original
+      forward Catbone silhouette, closes both eyes, and shifts only the upper
+      silhouette one pixel per rub direction while feet stay fixed. Registered
+      `catbone_pet` metadata; runtime Petting Activity remains separate work.
 - [x] **GTK Pet Controller + persistent live settings.** A single-instance
       `Adw.Application` now owns both the layer-shell overlay and a normal
       760×560 responsive settings window. First launch shows the controller;
@@ -406,22 +417,34 @@ widest row):
       action.
 
 ## To do / open
+- [x] Implemented the approved Pet Behavior/Petting Activity PRD from GitHub
+      issue #1 with deterministic `PetBehavior` tests, normalized head/body
+      interaction geometry, petting/heart sprites, live setting, reduced-motion
+      behavior, and GTK overlay integration.
 - [ ] `assets/src/rest-block-reference.png` — stashed crop of the source pack's
       REST block (alert/stretch/lounge/flopped-curled poses, gray palette,
       untouched, not wired into manifest). Candidate frames for a future
       "held by scruff / flopped" reaction if wanted later.
 - [ ] Decide fate of dead Electron files (`src/`, `electron-builder.yml`, …) — delete?
-- [ ] Groom: source/add a real groom animation if wanted (none in current pack).
-- [ ] README: document behavior model + `PET_IDLE_SEC`, swayidle/niri optional deps.
-- [ ] Goldie pet: directional walk rows not mapped (only cat has `walk_fd/front/back`)
-      — falls back to side walk. Map if Goldie is to be used.
-- [ ] Tune walk speed / sit durations / diagonal thresholds after live observation.
+- [ ] README: document the stationary behavior model and petting interaction.
+
+## Architecture deepening
+
+- [x] Pet Behavior is the sole owner of Interaction Priority, Typing Activity
+      and Typing Hold, Tracking Pose arbitration, normalized Stationary
+      Placement, drag wobble timing, Hiding Reasons, petting state, and heart
+      lifetimes. All time-driven transitions happen through explicit
+      `advance(to=...)`; `snapshot()` is immutable and side-effect free.
+      Companion Presentation converts semantic pose variants and pointer
+      vectors into sprite frames. `Pet` now translates GTK/input observations
+      and renders the resulting snapshot; it no longer mirrors behavior flags,
+      hold timers, wobble clocks, or numeric behavior frames. Tests exercise
+      Behavior Snapshot rather than private `Pet` state.
 
 ## Tuning knobs
-- Pet Controller: size 75–200%, Typing Hold 0–5s, pointer/typing toggles.
+- Pet Controller: size 75–200%, Typing Hold 0–5s, pointer/typing/petting toggles.
 - Persistent config: `$XDG_CONFIG_HOME/pixel-pet/settings.json`.
-- Legacy fallback: `PET_SCALE` (env, default 4), `PET_IDLE_SEC` (env, default 180).
-- `SIT_MIN/SIT_MAX` (5–12s), `WALK_MIN` (2.5s) in `pet.py`.
+- Legacy size fallback: `PET_SCALE` (env, default 4).
 
 ## Gotchas
 - **Don't** kill via `pkill -f pet.py` / `pgrep -f pet.py` — matches the shell's own

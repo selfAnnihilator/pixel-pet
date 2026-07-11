@@ -13,6 +13,7 @@ DEFAULTS = {
     "size_percent": 100,
     "pointer_tracking": True,
     "typing_reactions": True,
+    "petting_reactions": True,
     "typing_hold_seconds": 2.0,
     "paused": False,
     "launch_at_login": False,
@@ -49,6 +50,7 @@ def normalize(raw):
     ) * 25)
     data["pointer_tracking"] = bool(raw.get("pointer_tracking", True))
     data["typing_reactions"] = bool(raw.get("typing_reactions", True))
+    data["petting_reactions"] = bool(raw.get("petting_reactions", True))
     data["typing_hold_seconds"] = round(
         _clamp_number(raw.get("typing_hold_seconds"), 0, 5, 2) * 2
     ) / 2

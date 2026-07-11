@@ -7,6 +7,49 @@ be dragged anywhere on screen.
 The GTK4/Libadwaita Pet Controller provides live configuration without command
 line flags or environment variables.
 
+## Install
+
+Install the latest stable GitHub Release for the current user with one command:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/selfAnnihilator/pixel-pet/master/scripts/install-release.sh | sh
+```
+
+When working from a cloned checkout, install that checkout with:
+
+```bash
+./scripts/install.sh
+```
+
+Pixel Pet then appears in your desktop app launcher and can also be started
+with `pixel-pet` when `~/.local/bin` is on `PATH`. Run the same command again
+to update an existing installation from the current checkout. No root access
+is required. If Pixel Pet is already running during an update, quit and
+relaunch it afterward; the single running instance does not reload files in
+place.
+
+Check for or install stable updates from a terminal:
+
+```bash
+pixel-pet update --check
+pixel-pet update
+```
+
+The Pet Controller also has **Check and update** under **System**. Update checks
+run outside the GTK thread. Relaunch Pixel Pet after an installed update.
+
+Uninstall the application, launcher, icon, and autostart entry:
+
+```bash
+pixel-pet uninstall
+```
+
+Uninstall preserves settings in `~/.config/pixel-pet`. Remove settings too:
+
+```bash
+pixel-pet uninstall --purge
+```
+
 ## Run
 
 ```bash
@@ -23,11 +66,21 @@ Start without opening the controller:
 ./run-pet.sh --background
 ```
 
+Stop the installed app from a terminal like other desktop applications:
+
+```bash
+pkill -x pixel-pet
+```
+
+Pixel Pet sets its Linux process name to `pixel-pet`; the Python interpreter
+name is not exposed as its process identity.
+
 ## Settings
 
 - Pet size from 75% to 200%
 - Pointer tracking
 - Typing reactions
+- Petting reactions
 - Typing Hold from 0 to 5 seconds
 - Pause or resume
 - Reset screen position

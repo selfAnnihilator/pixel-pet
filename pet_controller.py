@@ -4,6 +4,10 @@ from __future__ import annotations
 
 import cairo
 import gi
+import os
+import subprocess
+import sys
+import threading
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, Gdk, Gtk, GLib
@@ -163,6 +167,13 @@ class PetController:
         self.typing_row.set_active(self.store.get("typing_reactions"))
         behavior.add(self.typing_row)
 
+        self.petting_row = Adw.SwitchRow(
+            title="Petting Reactions",
+            subtitle="Rub Catbone's head to pet",
+        )
+        self.petting_row.set_active(self.store.get("petting_reactions"))
+        behavior.add(self.petting_row)
+
         hold_row = Adw.ActionRow(
             title="Typing Hold", subtitle="Wait before sitting again"
         )
@@ -188,6 +199,17 @@ class PetController:
         self.autostart_row.set_active(self.store.get("launch_at_login"))
         system.add(self.autostart_row)
 
+        update_row = Adw.ActionRow(
+            title="Software Updates",
+            subtitle="Install the latest stable GitHub Release",
+        )
+        self.update_button = Gtk.Button(label="Check and update")
+        self.update_button.set_valign(Gtk.Align.CENTER)
+        self.update_button.connect("clicked", self._on_update)
+        update_row.add_suffix(self.update_button)
+        update_row.set_activatable_widget(self.update_button)
+        system.add(update_row)
+
         reset_row = Adw.ActionRow(
             title="Reset Position", subtitle="Return Catbone to the default spot"
         )
@@ -205,6 +227,7 @@ class PetController:
         self.hold_scale.connect("value-changed", self._on_hold_changed)
         self.tracking_row.connect("notify::active", self._on_tracking_changed)
         self.typing_row.connect("notify::active", self._on_typing_changed)
+        self.petting_row.connect("notify::active", self._on_petting_changed)
         self.autostart_row.connect("notify::active", self._on_autostart_changed)
         return content
 
@@ -235,12 +258,8 @@ class PetController:
         self.window.present()
 
     def _draw_preview(self, _area, cr, width, height):
-        animations = Gtk.Settings.get_default().get_property("gtk-enable-animations")
-        if self.pet.user_paused or not animations:
-            sheet, state, frame = self.pet.sheet, "track", 0
-        else:
-            sheet, state = self.pet._active()
-            frame = self.pet.frame
+        sheet, state = self.pet.active_sprite()
+        frame = self.pet.frame
         pixbuf = sheet.frames[state][min(frame, len(sheet.frames[state]) - 1)]
         bbox = sheet.bboxes[state][min(frame, len(sheet.bboxes[state]) - 1)]
         padding = 20
@@ -318,6 +337,14 @@ class PetController:
             self._save_and_apply("typing_reactions", row.get_active(),
                                  self.pet.set_typing_enabled)
 
+    def _on_petting_changed(self, row, _param):
+        if not self._syncing:
+            self._save_and_apply(
+                "petting_reactions",
+                row.get_active(),
+                self.pet.set_petting_enabled,
+            )
+
     def _on_autostart_changed(self, row, _param):
         if self._syncing:
             return
@@ -354,6 +381,37 @@ class PetController:
     def _on_reset_position(self, _button):
         if self._save_and_apply("position", None, lambda _value: self.pet.reset_position()):
             self.preview.queue_draw()
+
+    def _on_update(self, _button):
+        self.update_button.set_sensitive(False)
+        self.update_button.set_label("Checking…")
+        manager = os.path.join(os.path.dirname(self.launcher_path), "pixel_pet_manager.py")
+
+        def run_update():
+            result = subprocess.run(
+                [sys.executable, manager, "update"],
+                capture_output=True,
+                text=True,
+            )
+            GLib.idle_add(self._finish_update, result)
+
+        threading.Thread(target=run_update, daemon=True).start()
+
+    def _finish_update(self, result):
+        self.update_button.set_sensitive(True)
+        self.update_button.set_label("Check and update")
+        output = (result.stdout if result.returncode == 0 else result.stderr).strip()
+        if result.returncode == 0:
+            title = "Update check complete"
+            detail = output or "Pixel Pet is up to date."
+        else:
+            title = "Update failed"
+            detail = output or "Could not check for updates."
+        dialog = Adw.AlertDialog.new(title, detail)
+        dialog.add_response("close", "Close")
+        dialog.set_default_response("close")
+        dialog.present(self.window)
+        return False
 
     def _copy_input_command(self, _button):
         Gdk.Display.get_default().get_clipboard().set(INPUT_GROUP_COMMAND)
@@ -406,6 +464,7 @@ class PetController:
         self.pet.set_size_percent(self.store.get("size_percent"))
         self.pet.set_pointer_tracking(self.store.get("pointer_tracking"))
         self.pet.set_typing_enabled(self.store.get("typing_reactions"))
+        self.pet.set_petting_enabled(self.store.get("petting_reactions"))
         self.pet.set_typing_hold(self.store.get("typing_hold_seconds"))
         self.pet.set_user_paused(self.store.get("paused"))
         self.pet.reset_position()
@@ -418,6 +477,7 @@ class PetController:
         self.hold_scale.set_value(self.store.get("typing_hold_seconds"))
         self.tracking_row.set_active(self.store.get("pointer_tracking"))
         self.typing_row.set_active(self.store.get("typing_reactions"))
+        self.petting_row.set_active(self.store.get("petting_reactions"))
         self.autostart_row.set_active(self.store.get("launch_at_login"))
         self._syncing = False
         self._update_size_label()

@@ -126,7 +126,7 @@
     },
     "catbone": {
       "sheet": "catbone/track.png",
-      "icon": "cat/icon.png",
+      "icon": "catbone/icon.png",
       "cellW": 64,
       "cellH": 64,
       "cols": 9,
@@ -143,7 +143,7 @@
     },
     "catbone_drag": {
       "sheet": "catbone/drag.png",
-      "icon": "cat/icon.png",
+      "icon": "catbone/icon.png",
       "cellW": 128,
       "cellH": 128,
       "cols": 4,
@@ -160,7 +160,7 @@
     },
     "catbone_type": {
       "sheet": "catbone/type.png",
-      "icon": "cat/icon.png",
+      "icon": "catbone/icon.png",
       "cellW": 128,
       "cellH": 128,
       "cols": 4,
@@ -172,6 +172,23 @@
           "frames": 4,
           "fps": 6,
           "loop": true
+        }
+      }
+    },
+    "catbone_pet": {
+      "sheet": "catbone/pet.png",
+      "icon": "catbone/icon.png",
+      "cellW": 64,
+      "cellH": 64,
+      "cols": 3,
+      "scale": 1.5,
+      "facesRight": true,
+      "anims": {
+        "pet": {
+          "row": 0,
+          "frames": 3,
+          "fps": 3,
+          "loop": false
         }
       }
     },
