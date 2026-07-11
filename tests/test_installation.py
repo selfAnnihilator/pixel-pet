@@ -23,7 +23,7 @@ class InstallationTests(unittest.TestCase):
                 "XDG_BIN_HOME": str(bin_home),
             }
 
-            subprocess.run(
+            install_result = subprocess.run(
                 [project / "scripts/install.sh"],
                 cwd=project,
                 env=env,
@@ -31,6 +31,7 @@ class InstallationTests(unittest.TestCase):
                 capture_output=True,
                 text=True,
             )
+            self.assertIn("pixel-pet --help", install_result.stdout)
 
             command = bin_home / "pixel-pet"
             desktop = data_home / "applications/com.abhi.pixelpet.desktop"
@@ -50,6 +51,17 @@ class InstallationTests(unittest.TestCase):
                 timeout=5,
             )
             self.assertEqual(version.stdout.strip(), "Pixel Pet 0.1.0")
+
+            help_result = subprocess.run(
+                [command, "--help"],
+                env=env,
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            self.assertIn("pixel-pet update", help_result.stdout)
+            self.assertIn("pixel-pet uninstall --purge", help_result.stdout)
 
             subprocess.run(
                 [command, "uninstall"],

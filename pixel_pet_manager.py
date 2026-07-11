@@ -23,6 +23,19 @@ RELEASE_API = os.environ.get(
     "https://api.github.com/repos/selfAnnihilator/pixel-pet/releases/latest",
 )
 
+HELP_TEXT = """Usage: pixel-pet [COMMAND] [OPTIONS]
+
+Commands:
+  pixel-pet                       Open Pixel Pet
+  pixel-pet --background          Start without opening the controller
+  pixel-pet version               Show the installed version
+  pixel-pet update --check        Check for a stable update
+  pixel-pet update                Install the latest stable update
+  pixel-pet uninstall             Remove the app and preserve settings
+  pixel-pet uninstall --purge     Remove the app and settings
+  pixel-pet --help                Show this help
+"""
+
 
 @dataclass(frozen=True)
 class Release:
@@ -80,12 +93,17 @@ def install_release(release: Release) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    arguments = sys.argv[1:] if argv is None else argv
+    if arguments and arguments[0] in {"help", "--help", "-h"}:
+        print(HELP_TEXT, end="")
+        return 0
+
     parser = argparse.ArgumentParser(prog="pixel-pet")
     subcommands = parser.add_subparsers(dest="command", required=True)
     subcommands.add_parser("version")
     update = subcommands.add_parser("update")
     update.add_argument("--check", action="store_true")
-    args = parser.parse_args(argv)
+    args = parser.parse_args(arguments)
     if args.command == "version":
         print(f"Pixel Pet {installed_version()}")
     elif args.command == "update":

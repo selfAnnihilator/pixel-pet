@@ -31,6 +31,9 @@ case "\${1:-}" in
     version|update)
         exec python3 "$APP_DIR/pixel_pet_manager.py" "\$@"
         ;;
+    help|--help|-h)
+        exec python3 "$APP_DIR/pixel_pet_manager.py" --help
+        ;;
     uninstall)
         shift
         exec "$APP_DIR/scripts/uninstall.sh" "\$@"
@@ -80,6 +83,7 @@ if command -v gtk-update-icon-cache >/dev/null 2>&1; then
 fi
 
 printf 'Installed Pixel Pet. Launch it from your app launcher or run: %s\n' "$COMMAND_FILE"
+printf 'See available commands with: %s --help\n' "$COMMAND_FILE"
 if command -v pgrep >/dev/null 2>&1 \
     && pgrep -f "$APP_DIR/pet.py" >/dev/null 2>&1
 then

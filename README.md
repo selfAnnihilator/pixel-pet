@@ -28,6 +28,12 @@ is required. If Pixel Pet is already running during an update, quit and
 relaunch it afterward; the single running instance does not reload files in
 place.
 
+List all installed-app commands:
+
+```bash
+pixel-pet --help
+```
+
 Check for or install stable updates from a terminal:
 
 ```bash
