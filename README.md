@@ -7,6 +7,14 @@ be dragged anywhere on screen.
 The GTK4/Libadwaita Pet Controller provides live configuration without command
 line flags or environment variables.
 
+## Screenshots
+
+![Pixel Pet controller with Catbone preview and live settings](docs/images/pixel-pet-controller.png)
+
+| Typing reaction | Pointer tracking |
+| --- | --- |
+| ![Catbone sitting and typing](docs/images/catbone-typing.png) | ![Catbone looking toward the pointer](docs/images/catbone-pointer-tracking.png) |
+
 ## Install
 
 Install the latest stable GitHub Release for the current user with one command:
@@ -126,13 +134,28 @@ Pixel Pet never runs `sudo` itself.
 
 ## Behavior
 
-- Pointer movement selects one of nine Catbone look directions.
-- Every physical keydown alternates the typing paw.
-- A held key holds the pressed-paw pose.
-- Releasing the final key returns to the ready pose for the configured Typing
-  Hold duration.
-- Dragging overrides typing and shows the held wobble animation.
-- Fullscreen apps temporarily hide the overlay.
+Catbone is a stationary companion: it stays wherever you place it and never
+walks or roams on its own.
+
+- **Pointer tracking:** Catbone looks toward the pointer using nine directional
+  poses, then returns to its normal forward-facing sitting pose.
+- **Typing:** Every physical key press counts, including modifiers and function
+  keys. Catbone types while sitting and alternates paws with successive presses.
+  Holding a key holds the matching pressed-paw pose. After the last release,
+  Catbone waits in its ready pose for the configured Typing Hold duration.
+- **Petting:** Press Catbone's head and rub left and right while holding the
+  mouse button. Catbone closes its eyes, gently wiggles with the movement, and
+  continuously floats up to three small pixel hearts. Releasing leaves the
+  relaxed pose briefly before normal behavior resumes.
+- **Positioning:** Press and drag Catbone's body to move it. The head is reserved
+  for petting when Petting Reactions are enabled; disabling them makes the whole
+  body draggable.
+- **Activity priority:** Hiding, dragging, petting, and active typing take
+  priority over passive tracking and hold poses, so a new action responds
+  immediately instead of waiting for the previous reaction to finish.
+- **Visibility:** Pausing the pet or entering a fullscreen app temporarily hides
+  it without losing its saved position.
+- **Silence:** Pixel Pet has no voice, music, or sound effects.
 
 ## Project layout
 
