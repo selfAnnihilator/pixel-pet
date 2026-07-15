@@ -14,7 +14,8 @@ mkdir -p "$APP_DIR/scripts" "$APPLICATIONS_DIR" "$ICON_DIR" "$BIN_HOME"
 
 for file in \
     pet.py pet_behavior.py pet_controller.py pet_settings.py process_identity.py \
-    pixel_pet_manager.py sprite_presentation.py run-pet.sh VERSION README.md \
+    behavior_input.py behavior_scheduler.py niri_monitor.py live_settings.py \
+    pixel_pet_manager.py companion_presentation.py run-pet.sh VERSION README.md \
     PRODUCT.md DESIGN.md CONTEXT.md
 do
     install -m 0644 "$PROJECT_DIR/$file" "$APP_DIR/$file"

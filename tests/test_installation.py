@@ -40,6 +40,13 @@ class InstallationTests(unittest.TestCase):
             self.assertTrue(desktop.is_file())
             self.assertTrue(icon.is_file())
             self.assertTrue((data_home / "pixel-pet/pet.py").is_file())
+            self.assertTrue(
+                (data_home / "pixel-pet/companion_presentation.py").is_file()
+            )
+            self.assertTrue((data_home / "pixel-pet/behavior_input.py").is_file())
+            self.assertTrue((data_home / "pixel-pet/behavior_scheduler.py").is_file())
+            self.assertTrue((data_home / "pixel-pet/niri_monitor.py").is_file())
+            self.assertTrue((data_home / "pixel-pet/live_settings.py").is_file())
             subprocess.run(["desktop-file-validate", desktop], check=True)
 
             version = subprocess.run(

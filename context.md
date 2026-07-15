@@ -1,6 +1,6 @@
 # Pixel Pet — Context
 
-> Living status doc. **Update after every successful change.** Last updated: 2026-07-11 (Catbone petting and heart sprite assets)
+> Living status doc. **Update after every successful change.** Last updated: 2026-07-15 (runtime deepening)
 
 ## ⚠️ Maintenance rule (read first)
 **This file MUST be updated after every successfully implemented change.** On each change:
@@ -13,17 +13,20 @@ Do this as part of the change itself — not optional, not later.
 ## What it is
 Pixel-art desktop companion (Comnyang-style cat) that lives on the screen as a
 **screen-level overlay** — no window, no border, transparent, click-through,
-workspace-independent. Roams in 2D, sits, sleeps when you're away.
+workspace-independent. Catbone remains at its user-chosen Stationary Placement
+and reacts only to direct user activity.
 
 ## Architecture (current)
 - **`pet.py`** — the implementation. GTK4 + PyGObject + Cairo, painting on a
   **wlr-layer-shell** OVERLAY surface (gtk4-layer-shell), anchored to all 4 edges =
   full-output. Click-through everywhere except the pet's own bbox (input region
-  shrunk to that rect each tick) so the cat itself is clickable while the rest
-  of the screen still passes clicks through. Pixel-art scaled with
-  `FILTER_NEAREST`. Raw evdev readers observe global relative pointer motion and
-  keyboard presses without focusing the overlay; access requires membership in
-  the `input` group. `Gtk.GestureDrag` immediately switches to the held companion
+  shrunk to the current opaque sprite geometry) so the cat itself is clickable
+  while the rest of the screen still passes clicks through. Pixel-art scaled with
+  `FILTER_NEAREST`. One lifecycle-owned evdev adapter observes global relative
+  pointer motion and keyboard presses without focusing the overlay, coalesces
+  pointer motion, preserves physical Typing Steps, and delivers immutable
+  observations on the GTK thread; access requires membership in the `input`
+  group. `Gtk.GestureDrag` immediately switches to the held companion
   sheet and follows the pointer until release. Only the active pet sheet and its
   `_drag` / `_type` companion sheets are loaded; dormant future pet definitions
   do not affect startup.
@@ -33,13 +36,31 @@ workspace-independent. Roams in 2D, sits, sleeps when you're away.
 - **`pet_controller.py`** — production GTK4/Libadwaita settings surface with a
   live pixel preview, responsive split/stack layout, permission diagnostics,
   live settings controls, pause/reset/default actions, and explicit quit.
+- **`companion_presentation.py`** — pure Companion Presentation implementation.
+  One immutable plan owns sprite selection, viewport conversion, sprite-aware
+  clamping, pixel scaling, Petting Region mapping, input geometry, and Petting
+  Heart drawing instructions for the overlay and Pet Preview rendering adapters.
+- **`behavior_scheduler.py`** — lifecycle-aware Behavior Advancement driver.
+  Behavior Activity advances once immediately; Behavior Schedule then arms only
+  the next semantic deadline or a 30 FPS source while visible motion is active.
+  Sitting, hiding, reduced motion, and a hidden Pet Preview have no recurring
+  redraw source.
+- **`niri_monitor.py`** — deep niri adapter for the fullscreen Hiding Reason.
+  One long-lived JSON event stream owns workspace/window/focus/layout caches;
+  output geometry is loaded off the GTK thread at stream startup and rare
+  workspace-topology changes. The module owns multi-output fullscreen
+  derivation, unknown-event tolerance, capped recovery, and shutdown. It never
+  blocks the GTK thread or launches a process per poll.
+- **`live_settings.py`** — deep Live Setting persistence module. Visible values
+  apply immediately; equal normalized values disappear, rapid changes coalesce
+  for 250ms, atomic writes run on one worker, and failure rolls every setting
+  back to the last durable snapshot. Controller close and application shutdown
+  flush pending values; launch-at-login remains an explicit transaction.
 - **`pet_settings.py`** — validated JSON settings in the XDG config directory,
   atomic writes with rollback, normalized screen position, and owned XDG
   autostart entry management.
 - **`assets/manifest.json` + `assets/catbone/*.png`** — active tracking, drag,
   typing companion sheets + metadata.
-- Electron build (`src/`, `electron-builder.yml`, etc.) is **dead/superseded** —
-  kept for now, pending delete decision.
 
 ### Environment
 niri 26.04, single output eDP-1 1920x1080, Wayland, Arch/cachyos.
@@ -425,11 +446,40 @@ widest row):
       REST block (alert/stretch/lounge/flopped-curled poses, gray palette,
       untouched, not wired into manifest). Candidate frames for a future
       "held by scruff / flopped" reaction if wanted later.
-- [ ] Decide fate of dead Electron files (`src/`, `electron-builder.yml`, …) — delete?
-- [ ] README: document the stationary behavior model and petting interaction.
+- [x] Removed the dead Electron implementation, build metadata, Node manifests,
+      and legacy asset generator. Preserved the existing `assets/cat/*`
+      deletions, removed their broken manifest entry, and retained dormant
+      Goldie artwork/metadata for future product work.
+- [x] README documents the stationary behavior model and petting interaction.
 
 ## Architecture deepening
 
+- [x] Deepened Live Setting persistence behind one coordinator. Sliders no
+      longer run temporary-file creation, flush, and `fsync` for every GTK value
+      event. Desired and durable generations, Saving/Saved/error state,
+      coalescing, one persistence worker, shutdown flush, and whole-snapshot
+      rollback now have locality behind one interface.
+- [x] Replaced synchronous fullscreen polling with one deep niri event monitor.
+      The adapter consumes initial state and updates from one long-lived event
+      stream, maps the focused window to its actual output, tolerates future
+      events and malformed lines, clears stale hiding on failure, and retries
+      with capped backoff without blocking GTK.
+- [x] Deepened Behavior Advancement scheduling. Pet Behavior now owns Tracking
+      Pose expiry and exposes a pure Behavior Schedule containing the next
+      absolute semantic deadline plus an optional 30 FPS active-motion interval.
+      The permanent overlay and Pet Preview timers are gone; reduced-motion is
+      observed as a GTK setting change, and rendering adapters invalidate only
+      when their presentation plan changes.
+- [x] Deepened Behavior Activity delivery behind one evdev adapter. Pointer and
+      keyboard descriptors now share one blocking selector thread; repeat
+      suppression, held-key combination, pointer coalescing, Live Setting
+      lifecycle, GTK dispatch, and shutdown are local to the adapter. `Pet` no
+      longer polls mutable tracker fields or reconstructs serial deltas.
+- [x] Deepened Companion Presentation so overlay and Pet Preview rendering
+      adapters consume the same GTK-free plan. Sprite geometry, scaling,
+      clamping, input regions, and Petting Heart instructions no longer leak
+      across callers, and repeated drawing no longer mutates Stationary
+      Placement through unchanged viewport updates.
 - [x] Pet Behavior is the sole owner of Interaction Priority, Typing Activity
       and Typing Hold, Tracking Pose arbitration, normalized Stationary
       Placement, drag wobble timing, Hiding Reasons, petting state, and heart

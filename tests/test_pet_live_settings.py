@@ -15,13 +15,19 @@ class PetLiveSettingsTests(unittest.TestCase):
         self.real_sheet = pet.Sheet
 
         def fake_sheet(definition):
+            bounds = {
+                name: [
+                    (0, 0, definition["cellW"], definition["cellH"])
+                ] * animation["frames"]
+                for name, animation in definition["anims"].items()
+            }
             return SimpleNamespace(
                 defn=definition,
                 frames={
                     name: [None] * animation["frames"]
                     for name, animation in definition["anims"].items()
                 },
-                bboxes={},
+                bboxes=bounds,
                 cw=definition["cellW"],
                 ch=definition["cellH"],
                 base_scale=definition.get("scale", 1),
@@ -29,21 +35,6 @@ class PetLiveSettingsTests(unittest.TestCase):
             )
 
         pet.Sheet = fake_sheet
-        self.mouse = SimpleNamespace(
-            last_motion=0.0,
-            vx=0.0,
-            vy=0.0,
-            moving=lambda: False,
-            set_viewport=lambda _w, _h: None,
-        )
-        self.held = set()
-        self.keyboard = SimpleNamespace(
-            press_serial=0,
-            last_press=0.0,
-            last_release=0.0,
-            any_held=lambda: bool(self.held),
-        )
-
     def tearDown(self):
         pet.Sheet = self.real_sheet
 
@@ -58,9 +49,7 @@ class PetLiveSettingsTests(unittest.TestCase):
             "position": None,
         }
         settings.update(overrides)
-        return pet.Pet(
-            self.manifest, "catbone", self.mouse, self.keyboard, settings
-        )
+        return pet.Pet(self.manifest, "catbone", settings)
 
     def test_size_multiplier_stays_coupled_across_companion_sheets(self):
         companion = self.make_pet(size_percent=150)
@@ -128,7 +117,7 @@ class PetLiveSettingsTests(unittest.TestCase):
         companion.move_pointer_interaction(715, 571, 0.1)
         companion.move_pointer_interaction(700, 571, 0.2)
         companion.end_pointer_interaction(0.3)
-        companion.tracker.moving = lambda: True
+        companion.behavior.tracking_changed("north", at=0.31)
 
         snapshot = companion.behavior.snapshot()
         self.assertEqual((snapshot.activity, snapshot.variant), ("petting_hold", "relaxed"))
@@ -154,18 +143,14 @@ class PetLiveSettingsTests(unittest.TestCase):
 
     def test_keyboard_observation_drives_behavior_snapshot(self):
         companion = self.make_pet(typing_hold_seconds=2.0)
-        self.keyboard.press_serial = 1
-        self.held.add(30)
-        companion.update(0.0, now=0.1)
+        companion.observe_typing_step(0.1)
+        companion.observe_typing_held(True, 0.1)
         self.assertEqual(companion.behavior.snapshot().variant, "left")
 
-        self.keyboard.press_serial = 2
-        companion.update(0.0, now=0.2)
+        companion.observe_typing_step(0.2)
         self.assertEqual(companion.behavior.snapshot().variant, "right")
 
-        self.held.clear()
-        self.keyboard.last_release = 0.3
-        companion.update(0.0, now=0.3)
+        companion.observe_typing_held(False, 0.3)
         self.assertEqual(companion.behavior.snapshot().activity, "typing_hold")
 
         companion.update(0.0, now=2.3)
@@ -174,19 +159,14 @@ class PetLiveSettingsTests(unittest.TestCase):
     def test_pointer_observation_drives_semantic_tracking_pose(self):
         companion = self.make_pet()
         companion.set_viewport(1000, 800)
-        companion.tracker.vx = 700
-        companion.tracker.vy = 400
-        companion.tracker.moving = lambda: True
-
-        companion.update(0.0, now=0.1)
+        companion.observe_pointer(700, 400, 0.1)
         snapshot = companion.behavior.snapshot()
         self.assertEqual(
             (snapshot.activity, snapshot.pose, snapshot.variant),
             ("tracking", "tracking", "north"),
         )
 
-        companion.tracker.moving = lambda: False
-        companion.update(0.0, now=0.2)
+        companion.update(0.0, now=0.29)
         self.assertEqual(companion.behavior.snapshot().activity, "sitting")
 
     def test_pause_and_fullscreen_are_independent_hiding_reasons(self):

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Pixel Pet — wlr-layer-shell desktop companion.
 
-Unlike the Electron build, this paints the pet directly onto a screen-level
-*overlay* layer (gtk4-layer-shell). There is no window, no border, no workspace
+This paints the pet directly onto a screen-level *overlay* layer
+(gtk4-layer-shell). There is no border or workspace
 membership: the surface spans the whole output and floats above everything, so
 the pet is "an independent part of the screen" and ignores workspace switches.
 
@@ -16,17 +16,20 @@ from gi.repository import Adw, Gio, Gtk, Gdk, GdkPixbuf, GLib, Gtk4LayerShell as
 import cairo
 
 from pet_behavior import PetBehavior
+from behavior_input import (
+    EvdevBehaviorActivityAdapter,
+    PointerMotion,
+    TypingHeld,
+    TypingStep,
+)
+from behavior_scheduler import BehaviorAdvanceScheduler
+from companion_presentation import CompanionPresentation, SpriteMetrics
+from niri_monitor import NiriFullscreenMonitor
+from live_settings import LiveSettingsCoordinator
 from process_identity import set_process_name
-from sprite_presentation import SpritePresentation
-import glob
 import json
 import os
-import select
-import shutil
-import struct
-import subprocess
 import sys
-import threading
 import time
 
 from pet_settings import DEFAULTS, SettingsStore
@@ -37,170 +40,7 @@ ASSETS = os.path.join(HERE, "assets")
 SCALE = int(os.environ.get("PET_SCALE", "4"))
 
 # Mouse-tracking tuning.
-MOVE_TIMEOUT = 0.18   # cursor counts as "moving" for this long after last motion event
 DEADZONE = 24         # cursor within this many px of the cat center -> look straight
-
-class MouseTracker:
-    """Reads relative motion from evdev pointer devices and integrates it into a
-    virtual cursor position. Avoids capturing clicks (the overlay stays fully
-    click-through); niri exposes no cursor-position API so we read the raw devices.
-
-    Relative deltas are post-acceleration-agnostic: magnitude may drift from the
-    real pointer, but direction is what drives the sprite, and clamping at the
-    screen edges re-syncs position."""
-
-    _EV_SIZE = struct.calcsize("llHHi")  # input_event: timeval + type + code + value
-    _EV_REL = 0x02
-    _REL_X, _REL_Y = 0x00, 0x01
-
-    def __init__(self):
-        self.vx = self.vy = 0.0
-        self.last_motion = 0.0
-        self.W = self.H = 0
-        self._fds = []
-        self.available = False
-        self._started = False
-
-    def set_viewport(self, w, h):
-        if self.W == 0:
-            self.vx, self.vy = w / 2.0, h / 2.0
-        self.W, self.H = w, h
-
-    def moving(self):
-        return (time.monotonic() - self.last_motion) < MOVE_TIMEOUT
-
-    def _open_devices(self):
-        paths = sorted(set(glob.glob("/dev/input/by-path/*-event-mouse")))
-        if not paths:
-            paths = sorted(glob.glob("/dev/input/event*"))
-        for p in paths:
-            try:
-                self._fds.append(os.open(p, os.O_RDONLY | os.O_NONBLOCK))
-            except OSError:
-                pass
-        return bool(self._fds)
-
-    def start(self):
-        if self._started:
-            return self.available
-        if not self._open_devices():
-            print("pet: no readable pointer devices in /dev/input "
-                  "(need 'input' group); tracking disabled", file=sys.stderr)
-            self.available = False
-            return False
-        self.available = True
-        self._started = True
-        threading.Thread(target=self._reader, daemon=True).start()
-        return True
-
-    def _reader(self):
-        while True:
-            ready, _, _ = select.select(self._fds, [], [], 0.5)
-            for fd in ready:
-                try:
-                    buf = os.read(fd, self._EV_SIZE * 64)
-                except OSError:
-                    continue
-                self._consume(buf)
-
-    def _consume(self, buf):
-        dx = dy = 0
-        n = len(buf) // self._EV_SIZE
-        for i in range(n):
-            off = i * self._EV_SIZE
-            _, _, etype, code, value = struct.unpack_from("llHHi", buf, off)
-            if etype != self._EV_REL:
-                continue
-            if code == self._REL_X:
-                dx += value
-            elif code == self._REL_Y:
-                dy += value
-        if dx or dy:
-            self.vx = min(max(self.vx + dx, 0.0), float(self.W or 1))
-            self.vy = min(max(self.vy + dy, 0.0), float(self.H or 1))
-            self.last_motion = time.monotonic()
-
-
-class KeyboardTracker:
-    """Reads global keyboard presses from evdev without taking keyboard focus.
-
-    Every physical keydown counts, including modifiers. Kernel-generated repeat
-    events do not create new paw presses: they keep the current held-key pose.
-    Devices are restricted to keyboard symlinks so mouse buttons (also reported
-    as EV_KEY) cannot trigger typing.
-    """
-
-    _EV_SIZE = struct.calcsize("llHHi")
-    _EV_KEY = 0x01
-    _KEY_DOWN = 1
-
-    def __init__(self):
-        self.press_serial = 0
-        self.last_press = 0.0
-        self.last_release = 0.0
-        self.held_keys = set()
-        self._fds = []
-        self.available = False
-        self._started = False
-
-    def any_held(self):
-        return bool(self.held_keys)
-
-    def _open_devices(self):
-        paths = sorted(set(
-            glob.glob("/dev/input/by-path/*-event-kbd")
-            + glob.glob("/dev/input/by-id/*-event-kbd")
-        ))
-        opened = set()
-        for path in paths:
-            try:
-                real = os.path.realpath(path)
-                if real in opened:
-                    continue
-                self._fds.append(os.open(path, os.O_RDONLY | os.O_NONBLOCK))
-                opened.add(real)
-            except OSError:
-                pass
-        return bool(self._fds)
-
-    def start(self):
-        if self._started:
-            return self.available
-        if not self._open_devices():
-            print("pet: no readable keyboard devices in /dev/input "
-                  "(need 'input' group); typing disabled", file=sys.stderr)
-            self.available = False
-            return False
-        self.available = True
-        self._started = True
-        threading.Thread(target=self._reader, daemon=True).start()
-        return True
-
-    def _reader(self):
-        while True:
-            ready, _, _ = select.select(self._fds, [], [], 0.5)
-            for fd in ready:
-                try:
-                    buf = os.read(fd, self._EV_SIZE * 64)
-                except OSError:
-                    continue
-                self._consume(buf)
-
-    def _consume(self, buf):
-        n = len(buf) // self._EV_SIZE
-        for i in range(n):
-            off = i * self._EV_SIZE
-            _, _, etype, code, value = struct.unpack_from("llHHi", buf, off)
-            if etype != self._EV_KEY:
-                continue
-            if value == self._KEY_DOWN and code not in self.held_keys:
-                self.held_keys.add(code)
-                self.last_press = time.monotonic()
-                self.press_serial += 1
-            elif value == 0 and code in self.held_keys:
-                self.held_keys.remove(code)
-                self.last_release = time.monotonic()
-
 
 def _alpha_bbox(pixbuf):
     """Tight (x0, y0, x1, y1) box around the non-transparent pixels of a cell,
@@ -252,7 +92,7 @@ class Sheet:
 
 
 class Pet:
-    def __init__(self, manifest, pet_name, tracker=None, keyboard=None, settings=None):
+    def __init__(self, manifest, pet_name, settings=None):
         self.manifest = manifest
         pet_defs = manifest["pets"]
         self.name = pet_name if pet_name in pet_defs else manifest["defaultPet"]
@@ -265,9 +105,8 @@ class Pet:
         self.pet_sheet = Sheet(pet_def) if pet_def is not None else None
         self._heart_path = os.path.join(ASSETS, self.name, "heart.png")
         self.heart_pixbuf = None
-        self.tracker = tracker
-        self.keyboard = keyboard
         settings = settings or DEFAULTS
+        self.presentation = CompanionPresentation()
         self.size_percent = int(settings.get("size_percent", 100))
         pointer_tracking = bool(settings.get("pointer_tracking", True))
         typing_reactions = bool(settings.get("typing_reactions", True))
@@ -276,6 +115,7 @@ class Pet:
         user_paused = bool(settings.get("paused", False))
         self._saved_position = settings.get("position")
         self.W = self.H = 0
+        self._presentation_metrics = None
         self.set_size_percent(self.size_percent)
 
         self.gx = 0.0          # ground anchor x (feet, screen px)
@@ -283,7 +123,6 @@ class Pet:
         self.state = "track"   # animation row currently playing
         self.frame = 0
         self._drag_dx = self._drag_dy = 0.0
-        self._seen_key_serial = keyboard.press_serial if keyboard is not None else 0
         self._last = time.monotonic()
         saved = self._saved_position if isinstance(self._saved_position, dict) else {}
         initial_position = (saved.get("x", 0.7), saved.get("y", 0.8))
@@ -297,7 +136,6 @@ class Pet:
         self.behavior.visibility_changed(
             "user-pause", hidden=user_paused, at=time.monotonic()
         )
-        self.presentation = SpritePresentation()
         self._interaction_target = None
 
     # ---- behavior -------------------------------------------------------
@@ -315,25 +153,24 @@ class Pet:
 
     def set_size_percent(self, percent):
         self.size_percent = max(75, min(200, int(percent)))
-        multiplier = self.size_percent / 100.0
         for sheet in (self.sheet, self.drag_sheet, self.type_sheet, self.pet_sheet):
             if sheet is not None:
-                sheet.scale = sheet.base_scale * multiplier
+                sheet.scale = self.presentation.overlay_scale(
+                    base_scale=sheet.base_scale,
+                    size_percent=self.size_percent,
+                )
+        self._presentation_metrics = None
         if self.W:
             self._clamp()
 
     def set_user_paused(self, paused):
         paused = bool(paused)
-        if paused:
-            self.cancel_typing()
         self.behavior.visibility_changed(
             "user-pause", hidden=paused, at=time.monotonic()
         )
 
     def set_fullscreen_paused(self, paused):
         paused = bool(paused)
-        if paused:
-            self.cancel_typing()
         self.behavior.visibility_changed(
             "fullscreen", hidden=paused, at=time.monotonic()
         )
@@ -347,8 +184,6 @@ class Pet:
         self.behavior.typing_reactions_changed(
             bool(enabled), at=time.monotonic()
         )
-        if not enabled:
-            self.cancel_typing()
 
     def set_petting_enabled(self, enabled):
         self.behavior.petting_reactions_changed(
@@ -363,13 +198,34 @@ class Pet:
     def reset_position(self):
         self._saved_position = None
         if self.W:
-            self.gx, self.gy = self.W * 0.7, self.H * 0.8
+            self.gx, self.gy = self.presentation.position_to_anchor(
+                (0.7, 0.8), (self.W, self.H)
+            )
             self._clamp()
+            x, y = self.presentation.anchor_to_position(
+                (self.gx, self.gy), (self.W, self.H)
+            )
             self.behavior.placement_changed(
-                x=self.gx / self.W,
-                y=self.gy / self.H,
+                x=x,
+                y=y,
                 at=time.monotonic(),
             )
+
+    def set_normalized_position(self, position):
+        if position is None:
+            self.reset_position()
+            return
+        x = max(0.0, min(1.0, float(position["x"])))
+        y = max(0.0, min(1.0, float(position["y"])))
+        if self.W and self.H:
+            self.gx, self.gy = self.presentation.position_to_anchor(
+                (x, y), (self.W, self.H)
+            )
+            self._clamp()
+            x, y = self.presentation.anchor_to_position(
+                (self.gx, self.gy), (self.W, self.H)
+            )
+        self.behavior.placement_changed(x=x, y=y, at=time.monotonic())
 
     def normalized_position(self):
         if not self.W or not self.H:
@@ -377,18 +233,12 @@ class Pet:
         x, y = self.behavior.snapshot().position
         return {"x": x, "y": y}
 
-    def _normalized_sprite_point(self, x, y):
-        width = self.sheet.cw * self.sheet.scale
-        height = self.sheet.ch * self.sheet.scale
-        left = self.gx - width / 2.0
-        top = self.gy - height
-        return (x - left) / width, (y - top) / height
-
     def begin_pointer_interaction(self, x, y, now):
-        normalized_x, normalized_y = self._normalized_sprite_point(x, y)
+        plan = self.overlay_plan()
         target = self.presentation.interaction_target(
-            x=normalized_x,
-            y=normalized_y,
+            x=x,
+            y=y,
+            sprite=plan.sprite,
             petting_enabled=self.behavior.snapshot().petting_reactions,
         )
         self._interaction_target = target
@@ -398,10 +248,9 @@ class Pet:
                 x=x,
                 y=y,
                 now=now,
-                petting_width=self.sheet.cw * self.sheet.scale * 0.48,
+                petting_width=plan.sprite.width * 0.48,
             )
         else:
-            self.cancel_typing()
             self.behavior.set_dragging(True, now=now)
             self._drag_dx = self.gx - x
             self._drag_dy = self.gy - y
@@ -409,12 +258,15 @@ class Pet:
 
     def move_pointer_interaction(self, x, y, now):
         if self._interaction_target == "petting":
-            normalized_x, normalized_y = self._normalized_sprite_point(x, y)
+            plan = self.overlay_plan()
             self.behavior.move_interaction(
                 x=x,
                 y=y,
-                inside_petting=self.presentation.inside_petting(
-                    x=normalized_x, y=normalized_y, tolerance=0.04
+                inside_petting=self.presentation.inside_petting_point(
+                    x=x,
+                    y=y,
+                    sprite=plan.sprite,
+                    tolerance=0.04,
                 ),
                 now=now,
             )
@@ -423,9 +275,12 @@ class Pet:
             new_y = y + self._drag_dy
             self.gx, self.gy = new_x, new_y
             self._clamp()
+            normalized_x, normalized_y = self.presentation.anchor_to_position(
+                (self.gx, self.gy), (self.W, self.H)
+            )
             self.behavior.move_drag(
-                x=self.gx / self.W,
-                y=self.gy / self.H,
+                x=normalized_x,
+                y=normalized_y,
                 now=now,
             )
 
@@ -437,107 +292,135 @@ class Pet:
         self._interaction_target = None
 
     def set_viewport(self, w, h):
+        if self.W == w and self.H == h:
+            return
         self.W, self.H = w, h
         x, y = self.behavior.snapshot().position
-        self.gx, self.gy = w * x, h * y
-        if self.tracker is not None:
-            self.tracker.set_viewport(w, h)
+        self.gx, self.gy = self.presentation.position_to_anchor((x, y), (w, h))
         self._clamp()
+        x, y = self.presentation.anchor_to_position((self.gx, self.gy), (w, h))
         self.behavior.placement_changed(
-            x=self.gx / self.W,
-            y=self.gy / self.H,
+            x=x,
+            y=y,
             at=time.monotonic(),
         )
 
     def _clamp(self):
-        s = self.sheet.scale
-        dw, dh = self.sheet.cw * s, self.sheet.ch * s
-        self.gx = max(dw / 2, min(self.gx, self.W - dw / 2))
-        self.gy = max(dh, min(self.gy, self.H))
+        self.gx, self.gy = self.presentation.clamp_anchor(
+            (self.gx, self.gy),
+            viewport=(self.W, self.H),
+            metrics=self.presentation_metrics()["base"],
+        )
 
     def _cat_center(self):
         """Screen-space center of the drawn sprite (origin for the look vector)."""
-        dh = self.sheet.ch * self.sheet.scale
-        return self.gx, self.gy - dh / 2.0
+        return self.presentation.sprite_center(self.overlay_plan().sprite)
 
-    def active_sprite(self):
-        """Return the sprite selected from the pure Behavior Snapshot."""
-        selection = self.presentation.selection_for(self.behavior.snapshot())
-        sheets = {
+    def _sheet_map(self):
+        return {
             "base": self.sheet,
             "drag": self.drag_sheet,
             "type": self.type_sheet,
             "pet": self.pet_sheet,
         }
-        sheet = sheets.get(selection.sheet) or self.sheet
-        self.frame = selection.frame
-        return sheet, selection.state
 
-    def cancel_typing(self):
-        """Discard keyboard observations already consumed by a higher priority."""
-        if self.keyboard is not None:
-            self._seen_key_serial = self.keyboard.press_serial
+    def sheet_for(self, name):
+        return self._sheet_map().get(name) or self.sheet
 
-    def _update_typing(self, now):
-        """Translate keyboard observation into semantic Behavior Activity."""
-        keyboard = self.keyboard
-        if keyboard is None or self.type_sheet is None:
-            self.cancel_typing()
-            return False
+    def presentation_metrics(self):
+        if self._presentation_metrics is not None:
+            return self._presentation_metrics
+        metrics = {}
+        for name, sheet in self._sheet_map().items():
+            if sheet is None:
+                continue
+            bounds = {
+                state: tuple(tuple(box) for box in boxes)
+                for state, boxes in sheet.bboxes.items()
+            }
+            metrics[name] = SpriteMetrics(
+                cell_width=sheet.cw,
+                cell_height=sheet.ch,
+                scale=sheet.scale,
+                bounds=bounds,
+            )
+        self._presentation_metrics = metrics
+        return metrics
 
-        serial = keyboard.press_serial
-        if serial != self._seen_key_serial:
-            count = serial - self._seen_key_serial
-            self._seen_key_serial = serial
-            for _ in range(max(0, count)):
-                self.behavior.typing_step(at=now)
-        self.behavior.typing_held(keyboard.any_held(), at=now)
-        snapshot = self.behavior.snapshot()
-        return snapshot.activity in ("typing", "typing_hold")
+    def overlay_plan(self, snapshot=None):
+        snapshot = self.behavior.snapshot() if snapshot is None else snapshot
+        return self.presentation.overlay_plan(
+            snapshot,
+            viewport=(self.W, self.H),
+            sheets=self.presentation_metrics(),
+            size_percent=self.size_percent,
+        )
+
+    def preview_plan(self, width, height, snapshot=None):
+        snapshot = self.behavior.snapshot() if snapshot is None else snapshot
+        return self.presentation.preview_plan(
+            snapshot,
+            viewport=(width, height),
+            sheets=self.presentation_metrics(),
+            size_percent=self.size_percent,
+        )
+
+    def active_sprite(self):
+        """Return the sprite selected from the pure Behavior Snapshot."""
+        sheet_name, state, frame = self.presentation.selection_for(
+            self.behavior.snapshot()
+        )
+        sheet = self.sheet_for(sheet_name)
+        self.frame = frame
+        return sheet, state
+
+    def observe_pointer(self, x, y, at):
+        cx, cy = self._cat_center()
+        direction = self.presentation.tracking_direction(
+            dx=x - cx,
+            dy=y - cy,
+            deadzone=DEADZONE,
+        )
+        self.behavior.tracking_changed(direction, at=at)
+
+    def observe_typing_step(self, at):
+        if self.type_sheet is not None:
+            self.behavior.typing_step(at=at)
+
+    def observe_typing_held(self, held, at):
+        if self.type_sheet is not None:
+            self.behavior.typing_held(held, at=at)
 
     def update(self, dt, now=None):
         del dt
         now = time.monotonic() if now is None else now
         if self.behavior.snapshot().activity == "dragging":
-            self.cancel_typing()
             self.behavior.advance(to=now)
             self.active_sprite()
             return
-        self._update_typing(now)
-        # Look toward the (virtual) cursor. Straight ahead when idle or when the
-        # cursor sits on top of the cat; otherwise pick the matching compass frame.
-        t = self.tracker
-        if t is None or not t.moving():
-            self.behavior.tracking_changed(None, at=now)
-        else:
-            cx, cy = self._cat_center()
-            dx, dy = t.vx - cx, t.vy - cy
-            direction = self.presentation.tracking_direction(
-                dx=dx, dy=dy, deadzone=DEADZONE
-            )
-            self.behavior.tracking_changed(direction, at=now)
         self.behavior.advance(to=now)
         self.active_sprite()
 
     # ---- rendering ------------------------------------------------------
-    def draw(self, cr):
-        sheet, state = self.active_sprite()
-        frames = sheet.frames[state]
-        pb = frames[min(self.frame, len(frames) - 1)]
-        s = sheet.scale
-        dw, dh = sheet.cw * s, sheet.ch * s
-        dx = round(self.gx - dw / 2)
-        dy = round(self.gy - dh)
+    def draw(self, cr, snapshot=None):
+        plan = self.overlay_plan(snapshot)
+        self.draw_plan(cr, plan)
+
+    def draw_plan(self, cr, plan):
+        sprite = plan.sprite
+        sheet = self.sheet_for(sprite.sheet)
+        frames = sheet.frames[sprite.state]
+        pb = frames[min(sprite.frame, len(frames) - 1)]
         cr.save()
-        cr.translate(dx, dy)
-        cr.scale(s, s)
+        cr.translate(sprite.x, sprite.y)
+        cr.scale(sprite.scale, sprite.scale)
         Gdk.cairo_set_source_pixbuf(cr, pb, 0, 0)
         cr.get_source().set_filter(cairo.FILTER_NEAREST)  # crisp pixels
         cr.paint()
         cr.restore()
-        self._draw_hearts(cr)
+        self._draw_hearts(cr, plan.hearts)
 
-    def _draw_hearts(self, cr):
+    def _draw_hearts(self, cr, hearts):
         if self.heart_pixbuf is None and os.path.exists(self._heart_path):
             try:
                 self.heart_pixbuf = GdkPixbuf.Pixbuf.new_from_file(self._heart_path)
@@ -545,82 +428,14 @@ class Pet:
                 print(f"pet: couldn't load heart sprite: {error}", file=sys.stderr)
         if self.heart_pixbuf is None:
             return
-        hearts = self.behavior.snapshot().hearts
-        heart_scale = self.size_percent / 100.0
         for heart in hearts:
-            progress = heart.progress
-            alpha = (
-                1.0
-                if heart.static or progress < 2 / 3
-                else 3 * (1.0 - progress)
-            )
-            x = self.gx + heart.drift * 4 * progress - 3.5 * heart_scale
-            y = (
-                self.gy
-                - self.sheet.ch * self.sheet.scale * 0.78
-                - 18 * progress
-                - 3.5 * heart_scale
-            )
             cr.save()
-            cr.translate(round(x), round(y))
-            cr.scale(heart_scale, heart_scale)
+            cr.translate(heart.x, heart.y)
+            cr.scale(heart.scale, heart.scale)
             Gdk.cairo_set_source_pixbuf(cr, self.heart_pixbuf, 0, 0)
             cr.get_source().set_filter(cairo.FILTER_NEAREST)
-            cr.paint_with_alpha(max(0.0, alpha))
+            cr.paint_with_alpha(heart.alpha)
             cr.restore()
-
-# ---- environment integration (fullscreen), best-effort --------------------
-
-
-def _niri_json(*args):
-    try:
-        out = subprocess.run(["niri", "msg", "--json", *args],
-                             capture_output=True, text=True, timeout=2)
-        if out.returncode != 0:
-            return None
-        return json.loads(out.stdout)
-    except (OSError, ValueError, subprocess.SubprocessError):
-        return None
-
-
-def _niri_output_size():
-    outs = _niri_json("outputs")
-    if not isinstance(outs, dict):
-        return None
-    best = None
-    for o in outs.values():
-        m = o.get("logical") or {}
-        w, h = m.get("width"), m.get("height")
-        if w and h and (best is None or w * h > best[0] * best[1]):
-            best = (w, h)
-    return best
-
-
-def start_fullscreen_watch(pet, apply_visibility):
-    """Poll niri focused window; hide pet when a window fills the output."""
-    if not shutil.which("niri"):
-        return
-    size = _niri_output_size()
-    if size is None:
-        return
-
-    def poll():
-        fw = _niri_json("focused-window")
-        fs = False
-        if isinstance(fw, dict):
-            ws = (fw.get("layout") or {}).get("window_size")
-            if isinstance(ws, list) and len(ws) == 2:
-                fs = (ws[0], ws[1]) == size
-        if fs and not pet.fullscreen_paused:
-            pet.set_fullscreen_paused(True)
-            apply_visibility()
-        elif not fs and pet.fullscreen_paused:
-            pet.set_fullscreen_paused(False)
-            apply_visibility()
-        return True
-
-    GLib.timeout_add_seconds(1, poll)
-
 
 def main():
     set_process_name("pixel-pet")
@@ -628,11 +443,7 @@ def main():
         manifest = json.load(f)
     store = SettingsStore()
     pet_name = store.get("pet")
-    tracker = MouseTracker()
-    keyboard = KeyboardTracker()
-    pet = Pet(manifest, pet_name, tracker, keyboard, store.data)
-    tracker.start()
-    keyboard.start()
+    pet = Pet(manifest, pet_name, store.data)
 
     app = Adw.Application(
         application_id="com.abhi.pixelpet",
@@ -644,7 +455,113 @@ def main():
         "set_clickthrough": None,
         "controller": None,
         "show_controller": True,
+        "input_started": False,
+        "fullscreen_started": False,
+        "snapshot": pet.behavior.snapshot(),
+        "overlay_plan": None,
     }
+
+    def update_input_region(plan):
+        win = state["overlay"]
+        if win is None or not state["snapshot"].visible or plan.input_region is None:
+            return
+        surface = win.get_surface()
+        if surface is None:
+            return
+        region = plan.input_region
+        rect = cairo.RectangleInt(
+            region.x, region.y, region.width, region.height
+        )
+        surface.set_input_region(cairo.Region(rect))
+
+    def present_snapshot(snapshot, force):
+        state["snapshot"] = snapshot
+        if pet.W and pet.H:
+            plan = pet.overlay_plan(snapshot)
+            previous_plan = state["overlay_plan"]
+            if force or plan != previous_plan:
+                state["overlay_plan"] = plan
+                area = state["area"]
+                if area is not None and snapshot.visible:
+                    area.queue_draw()
+                if (
+                    force
+                    or previous_plan is None
+                    or plan.input_region != previous_plan.input_region
+                ):
+                    update_input_region(plan)
+        controller = state["controller"]
+        if controller is not None:
+            controller.refresh_snapshot(snapshot, force=force)
+        apply_overlay_visibility()
+
+    scheduler = BehaviorAdvanceScheduler(
+        pet.behavior,
+        present_snapshot,
+        schedule_timeout=lambda delay, callback: GLib.timeout_add(delay, callback),
+        cancel_timeout=lambda source: GLib.source_remove(source),
+    )
+
+    def on_fullscreen_changed(fullscreen):
+        now = time.monotonic()
+        pet.set_fullscreen_paused(fullscreen)
+        scheduler.activity(at=now)
+
+    fullscreen_monitor = NiriFullscreenMonitor(
+        on_fullscreen_changed,
+        dispatch=lambda callback: GLib.idle_add(callback),
+        schedule_retry=lambda delay, callback: GLib.timeout_add(delay, callback),
+        cancel_retry=lambda source: GLib.source_remove(source),
+    )
+
+    def on_observation(observation):
+        if isinstance(observation, PointerMotion):
+            pet.observe_pointer(observation.x, observation.y, observation.at)
+        elif isinstance(observation, TypingStep):
+            pet.observe_typing_step(observation.at)
+        elif isinstance(observation, TypingHeld):
+            pet.observe_typing_held(observation.held, observation.at)
+        scheduler.activity(at=observation.at)
+
+    activity_input = EvdevBehaviorActivityAdapter(
+        on_observation,
+        dispatch=lambda callback: GLib.idle_add(callback),
+    )
+    activity_input.configure(
+        pointer_enabled=store.get("pointer_tracking"),
+        typing_enabled=store.get("typing_reactions"),
+    )
+
+    def apply_pointer_tracking(enabled):
+        pet.set_pointer_tracking(enabled)
+        activity_input.configure(
+            pointer_enabled=enabled,
+            typing_enabled=store.get("typing_reactions"),
+        )
+
+    def apply_typing_reactions(enabled):
+        pet.set_typing_enabled(enabled)
+        activity_input.configure(
+            pointer_enabled=store.get("pointer_tracking"),
+            typing_enabled=enabled,
+        )
+
+    live_settings = LiveSettingsCoordinator(
+        store,
+        {
+            "size_percent": pet.set_size_percent,
+            "pointer_tracking": apply_pointer_tracking,
+            "typing_reactions": apply_typing_reactions,
+            "petting_reactions": pet.set_petting_enabled,
+            "typing_hold_seconds": pet.set_typing_hold,
+            "paused": pet.set_user_paused,
+            "position": pet.set_normalized_position,
+        },
+        schedule_timeout=lambda delay, callback: GLib.timeout_add(delay, callback),
+        cancel_timeout=lambda source: GLib.source_remove(source),
+        dispatch=lambda callback: GLib.idle_add(callback),
+        on_applied=scheduler.invalidate,
+    )
 
     def install_css(_app):
         GLib.set_application_name("Pixel Pet")
@@ -667,13 +584,15 @@ def main():
         win = state["overlay"]
         if win is None:
             return
-        if pet.paused:
-            win.set_visible(False)
+        if not state["snapshot"].visible:
+            if win.get_visible():
+                win.set_visible(False)
             return
-        win.present()
-        set_clickthrough = state["set_clickthrough"]
-        if set_clickthrough is not None:
-            GLib.idle_add(set_clickthrough)
+        if not win.get_visible():
+            win.present()
+            set_clickthrough = state["set_clickthrough"]
+            if set_clickthrough is not None:
+                GLib.idle_add(set_clickthrough)
 
     def create_overlay():
         if state["overlay"] is not None:
@@ -690,6 +609,7 @@ def main():
         LayerShell.set_keyboard_mode(win, LayerShell.KeyboardMode.NONE)
 
         area = Gtk.DrawingArea()
+        state["area"] = area
         area.set_hexpand(True)
         area.set_vexpand(True)
         win.set_child(area)
@@ -707,8 +627,16 @@ def main():
         )
 
         def draw_func(area, cr, w, h):
+            activity_input.set_viewport(w, h)
+            viewport_changed = pet.W != w or pet.H != h
             pet.set_viewport(w, h)
-            pet.draw(cr)
+            if viewport_changed:
+                scheduler.invalidate()
+            plan = state["overlay_plan"]
+            if plan is None:
+                plan = pet.overlay_plan(state["snapshot"])
+                state["overlay_plan"] = plan
+            pet.draw_plan(cr, plan)
 
         area.set_draw_func(draw_func)
 
@@ -719,59 +647,41 @@ def main():
             surface = win.get_surface()
             if surface is not None:
                 surface.set_input_region(cairo.Region())
+                plan = state["overlay_plan"]
+                if plan is not None:
+                    update_input_region(plan)
             return False
 
         state["set_clickthrough"] = set_clickthrough
-
-        def update_input_region():
-            # Click-through everywhere except the cat's actual (non-transparent)
-            # pixels, so it can be grabbed while the rest of the screen passes
-            # clicks through.
-            if pet.W == 0 or pet.paused:
-                return
-            surface = win.get_surface()
-            if surface is None:
-                return
-            sheet, state = pet.active_sprite()
-            cw, ch = sheet.cw, sheet.ch
-            s = sheet.scale
-            dw, dh = cw * s, ch * s
-            dx = round(pet.gx - dw / 2)
-            dy = round(pet.gy - dh)
-            frames = sheet.bboxes.get(state) or [(0, 0, cw, ch)]
-            bx0, by0, bx1, by1 = frames[min(pet.frame, len(frames) - 1)]
-            rx = max(0, round(dx + bx0 * s))
-            ry = max(0, round(dy + by0 * s))
-            rw = min(round((bx1 - bx0) * s), pet.W - rx)
-            rh = min(round((by1 - by0) * s), pet.H - ry)
-            if rw > 0 and rh > 0:
-                rect = cairo.RectangleInt(int(rx), int(ry), int(rw), int(rh))
-                surface.set_input_region(cairo.Region(rect))
 
         # Press origin locks the interaction: head rubs pet the cat; body motion
         # drags it with the existing offset-locked positioning behavior.
         def on_drag_begin(gesture, start_x, start_y):
             gesture.set_state(Gtk.EventSequenceState.CLAIMED)
-            pet.begin_pointer_interaction(start_x, start_y, time.monotonic())
+            now = time.monotonic()
+            pet.begin_pointer_interaction(start_x, start_y, now)
+            scheduler.activity(at=now)
 
         def on_drag_update(gesture, offset_x, offset_y):
             ok, start_x, start_y = gesture.get_start_point()
             if not ok:
                 return
+            now = time.monotonic()
             pet.move_pointer_interaction(
                 start_x + offset_x,
                 start_y + offset_y,
-                time.monotonic(),
+                now,
             )
-            area.queue_draw()
+            scheduler.activity(at=now)
 
         def on_drag_end(gesture, offset_x, offset_y):
             was_drag = pet._interaction_target == "drag"
-            pet.end_pointer_interaction(time.monotonic())
+            now = time.monotonic()
+            pet.end_pointer_interaction(now)
+            scheduler.activity(at=now)
             if was_drag:
-                pet.cancel_typing()  # discard every key observed during drag
                 try:
-                    store.update("position", pet.normalized_position())
+                    live_settings.change("position", pet.normalized_position())
                 except OSError as error:
                     print(f"pet: couldn't save position: {error}", file=sys.stderr)
 
@@ -781,7 +691,7 @@ def main():
         drag.connect("drag-end", on_drag_end)
         area.add_controller(drag)
 
-        def tick():
+        def sync_reduced_motion(*_args):
             now = time.monotonic()
             gtk_settings = Gtk.Settings.get_default()
             if gtk_settings is not None:
@@ -789,36 +699,44 @@ def main():
                     not gtk_settings.get_property("gtk-enable-animations"),
                     at=now,
                 )
-            if pet.paused:        # fullscreen app: freeze, skip clock + redraw
-                pet.cancel_typing()  # discard keys pressed while hidden
-                pet._last = now
-                return True
-            dt = min(0.05, now - pet._last)
-            pet._last = now
-            pet.update(dt)
-            area.queue_draw()
-            update_input_region()
-            return True
+                scheduler.activity(at=now)
+            return False
 
-        GLib.timeout_add(1000 // 30, tick)
+        gtk_settings = Gtk.Settings.get_default()
+        if gtk_settings is not None:
+            gtk_settings.connect(
+                "notify::gtk-enable-animations", sync_reduced_motion
+            )
+            sync_reduced_motion()
 
         apply_overlay_visibility()
-        start_fullscreen_watch(pet, apply_overlay_visibility)
         return win
 
     def ensure_controller():
         controller = state["controller"]
         if controller is None:
             controller = PetController(
-                app, pet, store, tracker, keyboard,
+                app, pet, store, live_settings, activity_input,
                 os.path.join(HERE, "run-pet.sh"),
                 apply_overlay_visibility,
+                scheduler.invalidate,
             )
             state["controller"] = controller
         return controller
 
     def on_activate(_app):
         create_overlay()
+        if not scheduler.running:
+            scheduler.start()
+        if not state["input_started"]:
+            activity_input.start(
+                pointer_enabled=store.get("pointer_tracking"),
+                typing_enabled=store.get("typing_reactions"),
+            )
+            state["input_started"] = True
+        if not state["fullscreen_started"]:
+            fullscreen_monitor.start()
+            state["fullscreen_started"] = True
         if state["show_controller"]:
             ensure_controller().present()
 
@@ -831,6 +749,16 @@ def main():
     app.connect("startup", install_css)
     app.connect("activate", on_activate)
     app.connect("command-line", on_command_line)
+    def on_shutdown(_app):
+        fullscreen_monitor.stop()
+        try:
+            live_settings.close()
+        except OSError as error:
+            print(f"pet: couldn't flush settings: {error}", file=sys.stderr)
+        activity_input.close()
+        scheduler.stop()
+
+    app.connect("shutdown", on_shutdown)
     app.run(sys.argv)
 
 

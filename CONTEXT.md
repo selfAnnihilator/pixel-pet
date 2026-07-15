@@ -69,8 +69,12 @@ A semantic input crossing the Pet Behavior seam with caller-supplied monotonic t
 _Avoid_: Input event, GTK event
 
 **Behavior Advancement**:
-The explicit operation that moves Pet Behavior to a caller-supplied monotonic time and performs time-driven transitions such as hold completion, drag wobble steps, Petting Heart emission, and Petting Heart expiry. The overlay tick advances behavior once before overlay and Pet Preview read the same pure Behavior Snapshot.
+The explicit operation that moves Pet Behavior to a caller-supplied monotonic time and performs time-driven transitions such as hold completion, drag wobble steps, Petting Heart emission, and Petting Heart expiry. The Behavior Advancement scheduler advances once for each Behavior Activity or scheduled wake before the overlay and Pet Preview read the same pure Behavior Snapshot.
 _Avoid_: Tick update, snapshot time
+
+**Behavior Schedule**:
+The pure timing output owned by Pet Behavior after each Behavior Advancement. It contains the next absolute monotonic deadline for a semantic transition and, only while visible motion is active, an optional frame interval. Sitting, hidden behavior, reduced-motion Petting Hearts, and a hidden Pet Preview create no recurring work. GTK source identifiers, callbacks, and rendering state never cross the Pet Behavior seam.
+_Avoid_: Frame pump, render timer
 
 **Hiding Reason**:
 One independently tracked cause that makes the companion invisible, currently user pause or fullscreen hiding. The companion remains hidden while any Hiding Reason is active. Entering a reason consumes active and held reactions; clearing one reason cannot reveal the companion while another remains active.
@@ -85,7 +89,7 @@ The settings surface used to preview, configure, pause, reset, or quit the deskt
 _Avoid_: Dashboard, control panel, launcher
 
 **Live Setting**:
-A reversible preference whose saved value and visible effect update together as soon as the user changes it.
+A reversible preference whose visible effect updates immediately when the user changes it. Durable persistence coalesces rapid changes into one atomic write after 250 milliseconds of quiet, shows a Saving state until complete, and flushes before the Pet Controller hides or Pixel Pet quits. A failed write restores the last durable value and its visible effect together.
 _Avoid_: Option, pending change
 
 **Pet Preview**:

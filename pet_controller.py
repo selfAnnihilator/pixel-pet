@@ -12,23 +12,27 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, Gdk, Gtk, GLib
 
-from pet_settings import set_launch_at_login
+from pet_settings import DEFAULTS, set_launch_at_login
 
 
 INPUT_GROUP_COMMAND = 'sudo usermod -aG input "$USER"'
 
 
 class PetController:
-    def __init__(self, app, pet, store, tracker, keyboard, launcher_path,
-                 apply_overlay_visibility):
+    def __init__(self, app, pet, store, live_settings, activity_input, launcher_path,
+                 apply_overlay_visibility, refresh_presentation):
         self.app = app
         self.pet = pet
         self.store = store
-        self.tracker = tracker
-        self.keyboard = keyboard
+        self.live_settings = live_settings
+        self.activity_input = activity_input
         self.launcher_path = launcher_path
         self.apply_overlay_visibility = apply_overlay_visibility
+        self.refresh_presentation = refresh_presentation
         self._syncing = False
+        self._latest_snapshot = self.pet.behavior.snapshot()
+        self._preview_plan = None
+        self._preview_viewport = None
 
         self.window = Adw.ApplicationWindow(application=app, title="Pixel Pet")
         self.window.set_default_size(760, 560)
@@ -74,7 +78,7 @@ class PetController:
         if self.store.first_run:
             self.save_icon.set_from_icon_name("dialog-information-symbolic")
             self.save_label.set_label("Changes save automatically")
-        GLib.timeout_add(100, self._tick_preview)
+        self.live_settings.set_listener(self._settings_status)
 
     def _build_preview(self):
         pane = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
@@ -251,38 +255,43 @@ class PetController:
         return bar
 
     def _on_close(self, _window):
+        try:
+            self.live_settings.flush()
+        except OSError as error:
+            self._set_error("Couldn’t save settings", error)
+            return True
         self.window.set_visible(False)
         return True
 
     def present(self):
         self.window.present()
+        GLib.idle_add(self._refresh_after_present)
+
+    def _refresh_after_present(self):
+        self.refresh_presentation()
+        return False
 
     def _draw_preview(self, _area, cr, width, height):
-        sheet, state = self.pet.active_sprite()
-        frame = self.pet.frame
-        pixbuf = sheet.frames[state][min(frame, len(sheet.frames[state]) - 1)]
-        bbox = sheet.bboxes[state][min(frame, len(sheet.bboxes[state]) - 1)]
-        padding = 20
-        opaque_width = max(1, bbox[2] - bbox[0])
-        desired_width = 105 * self.pet.size_percent / 100.0
-        scale = max(0.5, min(
-            desired_width / opaque_width,
-            (width - padding * 2) / pixbuf.get_width(),
-            (height - padding * 2) / pixbuf.get_height(),
-        ))
-        draw_w, draw_h = pixbuf.get_width() * scale, pixbuf.get_height() * scale
-        x, y = round((width - draw_w) / 2), round((height - draw_h) / 2)
-        cr.save()
-        cr.translate(x, y)
-        cr.scale(scale, scale)
-        Gdk.cairo_set_source_pixbuf(cr, pixbuf, 0, 0)
-        cr.get_source().set_filter(cairo.FILTER_NEAREST)
-        cr.paint()
-        cr.restore()
+        if self._preview_plan is None or self._preview_viewport != (width, height):
+            self._preview_viewport = (width, height)
+            self._preview_plan = self.pet.preview_plan(
+                width, height, self._latest_snapshot
+            )
+        plan = self._preview_plan
+        self.pet.draw_plan(cr, plan)
 
-    def _tick_preview(self):
-        self.preview.queue_draw()
-        return True
+    def refresh_snapshot(self, snapshot, *, force=False):
+        self._latest_snapshot = snapshot
+        if not self.window.get_visible():
+            return
+        width, height = self.preview.get_width(), self.preview.get_height()
+        if width <= 1 or height <= 1:
+            return
+        plan = self.pet.preview_plan(width, height, snapshot)
+        if force or plan != self._preview_plan:
+            self._preview_plan = plan
+            self._preview_viewport = (width, height)
+            self.preview.queue_draw()
 
     def _set_saved(self):
         self.save_icon.set_from_icon_name("emblem-ok-symbolic")
@@ -294,15 +303,26 @@ class PetController:
         self.save_label.set_label(message)
         self.save_label.set_tooltip_text(str(detail))
 
-    def _save_and_apply(self, key, value, apply):
-        old = self.store.get(key)
-        try:
-            saved = self.store.update(key, value)
-            apply(saved)
+    def _settings_status(self, state, error):
+        if state == "saving":
+            self.save_icon.set_from_icon_name("document-save-symbolic")
+            self.save_label.set_label("Saving…")
+            self.save_label.set_tooltip_text(None)
+        elif state == "saved":
             self._set_saved()
+        else:
+            self._sync_controls()
+            self._refresh_pause_ui()
+            self.apply_overlay_visibility()
+            self._set_error("Couldn’t save settings", error)
+
+    def _change_setting(self, key, value):
+        try:
+            self.live_settings.change(key, value)
+            if key in {"pointer_tracking", "typing_reactions"}:
+                self._refresh_permissions(mark_saved=False)
             return True
-        except OSError as error:
-            apply(old)
+        except Exception as error:
             self._sync_controls()
             self._refresh_pause_ui()
             self.apply_overlay_visibility()
@@ -316,7 +336,7 @@ class PetController:
         value = int(round(scale.get_value() / 25) * 25)
         self._update_size_label()
         if not self._syncing:
-            self._save_and_apply("size_percent", value, self.pet.set_size_percent)
+            self._change_setting("size_percent", value)
 
     def _update_hold_label(self):
         self.hold_value.set_label(f"{self.hold_scale.get_value():.1f} seconds")
@@ -325,25 +345,19 @@ class PetController:
         value = round(scale.get_value() * 2) / 2
         self._update_hold_label()
         if not self._syncing:
-            self._save_and_apply("typing_hold_seconds", value, self.pet.set_typing_hold)
+            self._change_setting("typing_hold_seconds", value)
 
     def _on_tracking_changed(self, row, _param):
         if not self._syncing:
-            self._save_and_apply("pointer_tracking", row.get_active(),
-                                 self.pet.set_pointer_tracking)
+            self._change_setting("pointer_tracking", row.get_active())
 
     def _on_typing_changed(self, row, _param):
         if not self._syncing:
-            self._save_and_apply("typing_reactions", row.get_active(),
-                                 self.pet.set_typing_enabled)
+            self._change_setting("typing_reactions", row.get_active())
 
     def _on_petting_changed(self, row, _param):
         if not self._syncing:
-            self._save_and_apply(
-                "petting_reactions",
-                row.get_active(),
-                self.pet.set_petting_enabled,
-            )
+            self._change_setting("petting_reactions", row.get_active())
 
     def _on_autostart_changed(self, row, _param):
         if self._syncing:
@@ -351,8 +365,10 @@ class PetController:
         enabled = row.get_active()
         previous = self.store.get("launch_at_login")
         try:
+            self.live_settings.flush()
             set_launch_at_login(enabled, self.launcher_path)
             self.store.update("launch_at_login", enabled)
+            self.live_settings.accept_durable(self.store.data)
             self._set_saved()
         except OSError as error:
             try:
@@ -366,7 +382,7 @@ class PetController:
 
     def _on_pause(self, _button):
         paused = not self.pet.user_paused
-        if self._save_and_apply("paused", paused, self.pet.set_user_paused):
+        if self._change_setting("paused", paused):
             self.apply_overlay_visibility()
             self._refresh_pause_ui()
 
@@ -379,8 +395,8 @@ class PetController:
             self.pet_status.add_css_class("paused-status")
 
     def _on_reset_position(self, _button):
-        if self._save_and_apply("position", None, lambda _value: self.pet.reset_position()):
-            self.preview.queue_draw()
+        if self._change_setting("position", None):
+            self.refresh_presentation()
 
     def _on_update(self, _button):
         self.update_button.set_sensitive(False)
@@ -419,16 +435,18 @@ class PetController:
         self.save_label.set_label("Setup command copied")
 
     def _recheck_permissions(self, _button):
-        self.tracker.start()
-        self.keyboard.start()
+        self.activity_input.recheck_access()
         self._refresh_permissions()
 
-    def _refresh_permissions(self):
-        missing = not self.tracker.available or not self.keyboard.available
+    def _refresh_permissions(self, *, mark_saved=True):
+        missing = (
+            not self.activity_input.pointer_available
+            or not self.activity_input.keyboard_available
+        )
         self.permission_group.set_visible(missing)
-        self.tracking_row.set_sensitive(self.tracker.available)
-        self.typing_row.set_sensitive(self.keyboard.available)
-        if not missing:
+        self.tracking_row.set_sensitive(self.activity_input.pointer_available)
+        self.typing_row.set_sensitive(self.activity_input.keyboard_available)
+        if not missing and mark_saved:
             self._set_saved()
 
     def _confirm_restore_defaults(self, _button):
@@ -448,10 +466,14 @@ class PetController:
             return
         previous_autostart = self.store.get("launch_at_login")
         try:
+            self.live_settings.flush()
             set_launch_at_login(False, self.launcher_path)
-            self.store.reset()
-            self._apply_all_settings()
+            self.live_settings.replace(DEFAULTS)
+            self.live_settings.flush()
             self._sync_controls()
+            self._refresh_permissions()
+            self._refresh_pause_ui()
+            self.apply_overlay_visibility()
             self._set_saved()
         except OSError as error:
             try:
@@ -459,17 +481,6 @@ class PetController:
             except OSError:
                 pass
             self._set_error("Couldn’t restore defaults", error)
-
-    def _apply_all_settings(self):
-        self.pet.set_size_percent(self.store.get("size_percent"))
-        self.pet.set_pointer_tracking(self.store.get("pointer_tracking"))
-        self.pet.set_typing_enabled(self.store.get("typing_reactions"))
-        self.pet.set_petting_enabled(self.store.get("petting_reactions"))
-        self.pet.set_typing_hold(self.store.get("typing_hold_seconds"))
-        self.pet.set_user_paused(self.store.get("paused"))
-        self.pet.reset_position()
-        self.apply_overlay_visibility()
-        self._refresh_pause_ui()
 
     def _sync_controls(self):
         self._syncing = True

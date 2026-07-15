@@ -159,7 +159,13 @@ walks or roams on its own.
 
 ## Project layout
 
-- `pet.py`: overlay runtime, input tracking, and application lifecycle
+- `pet.py`: GTK overlay and application lifecycle
+- `pet_behavior.py`: deterministic Pet Behavior and Behavior Schedule
+- `companion_presentation.py`: GTK-free overlay and Pet Preview plans
+- `behavior_input.py`: lifecycle-owned global input adapter
+- `behavior_scheduler.py`: activity/deadline-driven Behavior Advancement
+- `niri_monitor.py`: event-driven fullscreen Hiding Reason observation
+- `live_settings.py`: immediate settings with coalesced durable persistence
 - `pet_controller.py`: GTK4/Libadwaita Pet Controller
 - `pet_settings.py`: persistent settings and XDG autostart
 - `assets/catbone/`: tracking, drag, and typing sprite sheets

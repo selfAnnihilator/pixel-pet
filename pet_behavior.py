@@ -28,6 +28,12 @@ class BehaviorSnapshot:
     hearts: tuple[HeartSnapshot, ...]
 
 
+@dataclass(frozen=True)
+class BehaviorSchedule:
+    next_at: float | None
+    frame_interval: float | None
+
+
 class PetBehavior:
     """Translate semantic input activity into renderable pet state."""
 
@@ -40,6 +46,7 @@ class PetBehavior:
         typing_reactions: bool = True,
         petting_reactions: bool = True,
         tracking_enabled: bool = True,
+        tracking_hold_seconds: float = 0.18,
     ) -> None:
         self._reduced_motion = reduced_motion
         self._position = position
@@ -62,6 +69,8 @@ class PetBehavior:
         self._typing_reactions = typing_reactions
         self._petting_reactions = petting_reactions
         self._tracking_enabled = tracking_enabled
+        self._tracking_hold_seconds = tracking_hold_seconds
+        self._tracking_expires_at: float | None = None
         self._typing_hold_until: float | None = None
         self._next_typing_variant = "left"
         self._tracking_direction: str | None = None
@@ -186,16 +195,19 @@ class PetBehavior:
             self._typing_variant = "ready"
 
     def tracking_changed(self, direction: str | None, *, at: float) -> None:
-        del at
         if not self._tracking_enabled or self._hidden or self._dragging:
             return
         self._tracking_direction = direction
+        self._tracking_expires_at = (
+            at + self._tracking_hold_seconds if direction is not None else None
+        )
 
     def tracking_enabled_changed(self, enabled: bool, *, at: float) -> None:
         del at
         self._tracking_enabled = bool(enabled)
         if not enabled:
             self._tracking_direction = None
+            self._tracking_expires_at = None
 
     def _set_reduced_motion(self, enabled: bool) -> None:
         self._reduced_motion = bool(enabled)
@@ -243,6 +255,7 @@ class PetBehavior:
             self._typing_hold_until = None
             self._typing_variant = "ready"
             self._tracking_direction = None
+            self._tracking_expires_at = None
             self._inside_petting = False
             self._petting_variant = "relaxed"
             self._hearts.clear()
@@ -257,6 +270,7 @@ class PetBehavior:
             self._typing_hold_until = None
             self._typing_variant = "ready"
             self._tracking_direction = None
+            self._tracking_expires_at = None
             self._inside_petting = False
             self._petting_variant = "relaxed"
             self._hearts.clear()
@@ -283,6 +297,34 @@ class PetBehavior:
     def advance(self, *, to: float) -> None:
         self._advance_timed_state(to)
 
+    def schedule(self) -> BehaviorSchedule:
+        if self._hidden:
+            return BehaviorSchedule(next_at=None, frame_interval=None)
+        deadlines = [
+            deadline
+            for deadline in (
+                self._typing_hold_until,
+                self._petting_hold_until,
+                self._tracking_expires_at,
+            )
+            if deadline is not None
+        ]
+        if self._petting_active and self._inside_petting and not self._reduced_motion:
+            if self._last_heart_at is not None:
+                deadlines.append(self._last_heart_at + 0.3)
+        if not self._reduced_motion:
+            deadlines.extend(heart.born_at + 0.9 for heart in self._hearts)
+        moving_drag = (
+            self._dragging
+            and self._drag_moved_at is not None
+            and self._advanced_to - self._drag_moved_at <= 0.12
+        )
+        moving_hearts = bool(self._hearts) and not self._reduced_motion
+        return BehaviorSchedule(
+            next_at=min(deadlines) if deadlines else None,
+            frame_interval=(1 / 30) if moving_drag or moving_hearts else None,
+        )
+
     def _new_heart(self, born_at: float) -> _Heart:
         heart = _Heart(born_at=born_at, drift=(self._heart_serial % 3) - 1)
         self._heart_serial += 1
@@ -307,6 +349,9 @@ class PetBehavior:
                 self._drag_wobble_clock = 0.0
         if self._typing_hold_until is not None and now >= self._typing_hold_until:
             self._typing_hold_until = None
+        if self._tracking_expires_at is not None and now >= self._tracking_expires_at:
+            self._tracking_expires_at = None
+            self._tracking_direction = None
         if not self._reduced_motion:
             self._hearts = [
                 heart for heart in self._hearts if now - heart.born_at < 0.9

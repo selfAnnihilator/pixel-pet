@@ -97,6 +97,14 @@ class SettingsStore:
             raise
         return self.data[key]
 
+    def prepare(self, key, value):
+        candidate = dict(self.data)
+        candidate[key] = value
+        return normalize(candidate)
+
+    def adopt(self, snapshot):
+        self.data = normalize(snapshot)
+
     def reset(self):
         previous = deepcopy(self.data)
         self.data = deepcopy(DEFAULTS)
@@ -107,12 +115,17 @@ class SettingsStore:
             raise
 
     def save(self):
+        self.persist_snapshot(self.data)
+        self.first_run = False
+
+    def persist_snapshot(self, snapshot):
+        snapshot = normalize(snapshot)
         directory = os.path.dirname(self.path)
         os.makedirs(directory, mode=0o700, exist_ok=True)
         fd, temporary = tempfile.mkstemp(prefix="settings-", suffix=".json", dir=directory)
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                json.dump(self.data, handle, indent=2, sort_keys=True)
+                json.dump(snapshot, handle, indent=2, sort_keys=True)
                 handle.write("\n")
                 handle.flush()
                 os.fsync(handle.fileno())
@@ -123,7 +136,6 @@ class SettingsStore:
             except OSError:
                 pass
             raise
-        self.first_run = False
 
 
 def _desktop_exec(path):

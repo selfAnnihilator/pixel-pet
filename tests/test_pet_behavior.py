@@ -65,6 +65,15 @@ class PetBehaviorTests(unittest.TestCase):
         behavior.typing_held(False, at=0.3)
         self.assertEqual(behavior.snapshot().activity, "tracking")
 
+    def test_tracking_pose_expires_after_pointer_activity_window(self):
+        behavior = PetBehavior(tracking_hold_seconds=0.18)
+        behavior.tracking_changed("east", at=1.0)
+
+        behavior.advance(to=1.179)
+        self.assertEqual(behavior.snapshot().activity, "tracking")
+        behavior.advance(to=1.18)
+        self.assertEqual(behavior.snapshot().activity, "sitting")
+
     def test_disabling_tracking_consumes_tracking_pose(self):
         behavior = PetBehavior()
         behavior.tracking_changed("east", at=0.1)
