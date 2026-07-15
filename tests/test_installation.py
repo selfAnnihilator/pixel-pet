@@ -57,7 +57,7 @@ class InstallationTests(unittest.TestCase):
                 text=True,
                 timeout=5,
             )
-            self.assertEqual(version.stdout.strip(), "Pixel Pet 0.1.0")
+            self.assertEqual(version.stdout.strip(), "Pixel Pet 0.2.0")
 
             help_result = subprocess.run(
                 [command, "--help"],
@@ -122,7 +122,7 @@ class InstallationTests(unittest.TestCase):
             release = home / "release.json"
             release.write_text(
                 json.dumps({
-                    "tag_name": "v0.2.0",
+                    "tag_name": "v0.3.0",
                     "tarball_url": "https://example.invalid/pixel-pet.tar.gz",
                 }),
                 encoding="utf-8",
@@ -150,7 +150,7 @@ class InstallationTests(unittest.TestCase):
                 capture_output=True,
                 text=True,
             )
-            self.assertIn("0.2.0 is available", result.stdout)
+            self.assertIn("0.3.0 is available", result.stdout)
 
     def test_update_installs_newer_stable_release(self):
         project = Path(__file__).resolve().parents[1]
