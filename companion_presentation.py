@@ -109,6 +109,12 @@ class CompanionPresentation:
             return "type", "type", {"ready": 0, "left": 1, "right": 3}[snapshot.variant]
         if snapshot.pose == "tracking":
             return "base", "track", self.TRACK_FRAMES[snapshot.variant]
+        if snapshot.pose == "hunting":
+            if snapshot.variant.startswith("transition_"):
+                return "hunt", "hunt_transition", int(snapshot.variant.rsplit("_", 1)[1])
+            bend, gaze = snapshot.variant.split("_", 1)
+            gaze_frame = 0 if gaze == "forward" else self.TRACK_FRAMES[gaze]
+            return "hunt", f"hunt_{bend}", gaze_frame
         return "base", "track", 0
 
     def overlay_plan(

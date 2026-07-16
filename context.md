@@ -1,6 +1,6 @@
 # Pixel Pet — Context
 
-> Living status doc. **Update after every successful change.** Last updated: 2026-07-15 (runtime deepening)
+> Living status doc. **Update after every successful change.** Last updated: 2026-07-16 (Mouse Hunt big-eye tracking)
 
 ## ⚠️ Maintenance rule (read first)
 **This file MUST be updated after every successfully implemented change.** On each change:
@@ -28,7 +28,7 @@ and reacts only to direct user activity.
   observations on the GTK thread; access requires membership in the `input`
   group. `Gtk.GestureDrag` immediately switches to the held companion
   sheet and follows the pointer until release. Only the active pet sheet and its
-  `_drag` / `_type` companion sheets are loaded; dormant future pet definitions
+  `_drag` / `_type` / `_pet` / `_hunt` companion sheets are loaded; dormant future pet definitions
   do not affect startup.
 - **`run-pet.sh`** — launcher. Sets `LD_PRELOAD=libgtk4-layer-shell.so` (must load
   before libwayland) then runs `pet.py`; default launch opens the controller and
@@ -60,7 +60,7 @@ and reacts only to direct user activity.
   atomic writes with rollback, normalized screen position, and owned XDG
   autostart entry management.
 - **`assets/manifest.json` + `assets/catbone/*.png`** — active tracking, drag,
-  typing companion sheets + metadata.
+  typing, petting, and Mouse Hunt companion sheets + metadata.
 
 ### Environment
 niri 26.04, single output eDP-1 1920x1080, Wayland, Arch/cachyos.
@@ -75,6 +75,13 @@ Working dir: `/home/abhi/code/pixel-pet` (now a git repo, initialized 2026-06-16
 - `pet.png`: 192×64, three 64×64 closed-eye frames derived from the forward
   tracking pose: 0=relaxed, 1=one-pixel left wiggle, 2=one-pixel right wiggle.
   Frames 1/2 are selected from Petting Stroke direction; feet remain anchored.
+- `hunt.png`: 576×128, a fresh solid-black, white-outlined chibi hunt model in
+  the visual language of the Comnyang reference, on the existing 64×64
+  structure. Row 0 holds the one front-facing body model with nine large-eye
+  iris-gaze frames, and row 1 holds five static transition frames. The compact
+  low silhouette never sways, keeping its feet and Stationary Placement fixed.
+  Its generated source master is retained at
+  `assets/src/catbone-mouse-hunt-big-eyes-source.png`.
 - `heart.png`: transparent 7×7 solid-red Petting Heart used as a separate
   overlay effect rather than baked into Petting Pose frames.
 
@@ -170,6 +177,25 @@ widest row):
   alpha-band detection (no fixed grid; each row's frames are tightly trimmed).
 
 ## Done
+- [x] **Catbone Mouse Hunt.** Two full-visible-width horizontal reversals inside
+      300ms trigger a 200ms transition into the new low crouch. Gaze follows all
+      eight pointer directions immediately while the one front-facing body model
+      stays fixed. Its large black irises visibly move inside enlarged white eye
+      shapes; the feet and placement stay fixed. The pose holds for 400ms after
+      qualifying motion, then rises
+      over 200ms, and a new qualifying shake reverses that rise. Dragging,
+      petting, typing, hiding, disabling Pointer Tracking, or reduced motion
+      consumes the reaction rather than queueing it. Registered `catbone_hunt`,
+      wired pure presentation selection and width-normalized pointer input, and
+      preserved horizontal turning points through input coalescing so very fast
+      shakes cannot collapse into one displacement. Added regression coverage
+      for thresholds, timing, gaze, anchoring, interruption, reduced motion, and
+      sheet/frame selection.
+      The production sheet uses the requested Comnyang-inspired solid-black
+      chibi model beneath a crisp white outline; an asset regression test
+      rejects hollow/transparent interiors, lost exterior transparency, and
+      non-pixel alpha values. A dedicated asset test verifies that the iris pixels
+      change across gaze frames without moving the body model.
 - [x] **Catbone Petting Pose + Petting Heart assets.** Added
       `assets/catbone/pet.png` (three 64×64 relaxed/left/right frames) and
       `assets/catbone/heart.png` (7×7). Petting Pose preserves the original

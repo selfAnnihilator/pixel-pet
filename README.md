@@ -138,7 +138,10 @@ Catbone is a stationary companion: it stays wherever you place it and never
 walks or roams on its own.
 
 - **Pointer tracking:** Catbone looks toward the pointer using nine directional
-  poses, then returns to its normal forward-facing sitting pose.
+  poses, then returns to its normal forward-facing sitting pose. Shake the
+  pointer quickly left-right with two reversals to trigger Mouse Hunt: Catbone
+  drops into a fresh front-facing low crouch, fixes its feet in place, and
+  tracks the pointer with large moving irises without chasing it.
 - **Typing:** Every physical key press counts, including modifiers and function
   keys. Catbone types while sitting and alternates paws with successive presses.
   Holding a key holds the matching pressed-paw pose. After the last release,
@@ -168,7 +171,7 @@ walks or roams on its own.
 - `live_settings.py`: immediate settings with coalesced durable persistence
 - `pet_controller.py`: GTK4/Libadwaita Pet Controller
 - `pet_settings.py`: persistent settings and XDG autostart
-- `assets/catbone/`: tracking, drag, and typing sprite sheets
+- `assets/catbone/`: tracking, drag, typing, petting, and Mouse Hunt sprite sheets
 - `PRODUCT.md` / `DESIGN.md`: product and visual direction
 - `CONTEXT.md`: canonical behavior language
 - `context.md`: implementation history and operational notes

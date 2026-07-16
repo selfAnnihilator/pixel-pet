@@ -18,6 +18,7 @@ class PointerMotion:
     x: float
     y: float
     at: float
+    horizontal_deltas: tuple[float, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -167,6 +168,7 @@ class EvdevBehaviorActivityAdapter:
         if not (dx or dy):
             return
         with self._lock:
+            previous_x = self._pointer_x
             self._pointer_x = min(
                 max(self._pointer_x + dx, 0.0), float(self._width or 1)
             )
@@ -174,7 +176,15 @@ class EvdevBehaviorActivityAdapter:
                 max(self._pointer_y + dy, 0.0), float(self._height or 1)
             )
             x, y = self._pointer_x, self._pointer_y
-        self._queue(PointerMotion(x=x, y=y, at=self._clock() if at is None else at))
+            actual_dx = x - previous_x
+        self._queue(
+            PointerMotion(
+                x=x,
+                y=y,
+                at=self._clock() if at is None else at,
+                horizontal_deltas=(actual_dx,) if actual_dx else (),
+            )
+        )
 
     def consume_keyboard_bytes(self, payload: bytes, *, at: float | None = None) -> None:
         observed_at = self._clock() if at is None else at
@@ -290,7 +300,23 @@ class EvdevBehaviorActivityAdapter:
             if self._stopping:
                 return
             if isinstance(observation, PointerMotion):
-                self._pending_pointer = observation
+                horizontal_deltas = list(observation.horizontal_deltas)
+                if self._pending_pointer is not None:
+                    horizontal_deltas = list(
+                        self._pending_pointer.horizontal_deltas
+                    ) + horizontal_deltas
+                coalesced: list[float] = []
+                for delta in horizontal_deltas:
+                    if coalesced and (coalesced[-1] > 0) == (delta > 0):
+                        coalesced[-1] += delta
+                    else:
+                        coalesced.append(delta)
+                self._pending_pointer = PointerMotion(
+                    x=observation.x,
+                    y=observation.y,
+                    at=observation.at,
+                    horizontal_deltas=tuple(coalesced),
+                )
             else:
                 self._pending.append(observation)
             if self._delivery_scheduled:

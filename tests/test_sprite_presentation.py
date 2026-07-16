@@ -18,6 +18,15 @@ class CompanionPresentationTests(unittest.TestCase):
             "pet": SpriteMetrics(
                 64, 64, 1.5, {"pet": tuple((8, 8, 56, 60) for _ in range(3))}
             ),
+            "hunt": SpriteMetrics(
+                64,
+                64,
+                1.5,
+                {
+                    "hunt_front": tuple((7, 17, 56, 51) for _ in range(9)),
+                    "hunt_transition": tuple((7, 17, 56, 51) for _ in range(5)),
+                },
+            ),
         }
         self.presentation = CompanionPresentation()
 
@@ -117,6 +126,39 @@ class CompanionPresentationTests(unittest.TestCase):
         )
         self.assertIsNone(
             self.presentation.tracking_direction(dx=5, dy=5, deadzone=24)
+        )
+
+    def test_mouse_hunt_selects_front_sheet_and_gaze_frame(self):
+        behavior = PetBehavior()
+        behavior.pointer_moved("east", horizontal_delta=1.1, at=0.0)
+        behavior.pointer_moved("west", horizontal_delta=-1.1, at=0.1)
+        behavior.pointer_moved("east", horizontal_delta=1.1, at=0.2)
+        behavior.advance(to=0.4)
+
+        sprite = self.presentation.overlay_plan(
+            behavior.snapshot(), viewport=(1000, 800), sheets=self.sheets, size_percent=100
+        ).sprite
+
+        self.assertEqual(
+            (sprite.sheet, sprite.state, sprite.frame),
+            ("hunt", "hunt_front", 3),
+        )
+
+    def test_mouse_hunt_selects_front_sprite_for_above_cursor(self):
+        behavior = PetBehavior()
+        behavior.pointer_moved("east", horizontal_delta=1.1, at=0.0)
+        behavior.pointer_moved("west", horizontal_delta=-1.1, at=0.1)
+        behavior.pointer_moved("east", horizontal_delta=1.1, at=0.2)
+        behavior.advance(to=0.4)
+        behavior.pointer_moved("northwest", horizontal_delta=0.0, at=0.41)
+
+        sprite = self.presentation.overlay_plan(
+            behavior.snapshot(), viewport=(1000, 800), sheets=self.sheets, size_percent=100
+        ).sprite
+
+        self.assertEqual(
+            (sprite.sheet, sprite.state, sprite.frame),
+            ("hunt", "hunt_front", 8),
         )
 
     def test_overlay_plan_clamps_active_sprite_and_builds_input_region(self):

@@ -4,6 +4,12 @@ from pet_behavior import PetBehavior
 
 
 class PetBehaviorTests(unittest.TestCase):
+    @staticmethod
+    def trigger_mouse_hunt(behavior, *, start=0.0):
+        behavior.pointer_moved("east", horizontal_delta=1.1, at=start)
+        behavior.pointer_moved("west", horizontal_delta=-1.1, at=start + 0.1)
+        behavior.pointer_moved("east", horizontal_delta=1.1, at=start + 0.2)
+
     def test_snapshot_is_pure_and_only_advance_changes_timed_state(self):
         behavior = PetBehavior()
         behavior.begin_interaction(
@@ -49,7 +55,7 @@ class PetBehaviorTests(unittest.TestCase):
         behavior.typing_step(at=0.3)
         self.assertEqual(behavior.snapshot().activity, "sitting")
 
-    def test_tracking_pose_wins_over_typing_hold_but_not_typing_activity(self):
+    def test_typing_activity_discards_earlier_tracking_instead_of_queueing_it(self):
         behavior = PetBehavior(typing_hold_seconds=2.0)
         behavior.tracking_changed("northwest", at=0.1)
         tracking = behavior.snapshot()
@@ -63,7 +69,7 @@ class PetBehaviorTests(unittest.TestCase):
         self.assertEqual(behavior.snapshot().activity, "typing")
 
         behavior.typing_held(False, at=0.3)
-        self.assertEqual(behavior.snapshot().activity, "tracking")
+        self.assertEqual(behavior.snapshot().activity, "typing_hold")
 
     def test_tracking_pose_expires_after_pointer_activity_window(self):
         behavior = PetBehavior(tracking_hold_seconds=0.18)
@@ -82,6 +88,110 @@ class PetBehaviorTests(unittest.TestCase):
 
         behavior.tracking_changed("west", at=0.3)
         self.assertEqual(behavior.snapshot().activity, "sitting")
+
+    def test_two_fast_full_width_reversals_trigger_mouse_hunt(self):
+        behavior = PetBehavior(position=(0.4, 0.7))
+        self.trigger_mouse_hunt(behavior)
+
+        entering = behavior.snapshot()
+        self.assertEqual(
+            (entering.activity, entering.pose, entering.variant),
+            ("mouse_hunt_transition", "hunting", "transition_0"),
+        )
+        self.assertEqual(entering.position, (0.4, 0.7))
+        behavior.advance(to=0.4)
+        hunting = behavior.snapshot()
+        self.assertEqual(hunting.activity, "mouse_hunt")
+        self.assertEqual(hunting.pose, "hunting")
+        self.assertTrue(hunting.variant.endswith("_east"))
+        self.assertEqual(hunting.position, (0.4, 0.7))
+
+    def test_mouse_hunt_rejects_short_or_slow_shakes(self):
+        short = PetBehavior()
+        short.pointer_moved("east", horizontal_delta=0.8, at=0.0)
+        short.pointer_moved("west", horizontal_delta=-0.8, at=0.1)
+        short.pointer_moved("east", horizontal_delta=0.8, at=0.2)
+        self.assertNotEqual(short.snapshot().activity, "mouse_hunt_transition")
+
+        slow = PetBehavior()
+        slow.pointer_moved("east", horizontal_delta=1.1, at=0.0)
+        slow.pointer_moved("west", horizontal_delta=-1.1, at=0.2)
+        slow.pointer_moved("east", horizontal_delta=1.1, at=0.31)
+        self.assertNotEqual(slow.snapshot().activity, "mouse_hunt_transition")
+
+    def test_mouse_hunt_gaze_tracks_vertically_without_moving_anchor(self):
+        behavior = PetBehavior(position=(0.25, 0.75))
+        self.trigger_mouse_hunt(behavior)
+        behavior.advance(to=0.4)
+        behavior.pointer_moved("north", horizontal_delta=0.0, at=0.41)
+
+        snapshot = behavior.snapshot()
+        self.assertEqual(snapshot.variant, "front_north")
+        self.assertEqual(snapshot.position, (0.25, 0.75))
+
+    def test_mouse_hunt_uses_its_front_model_for_every_gaze(self):
+        behavior = PetBehavior()
+        self.trigger_mouse_hunt(behavior)
+        behavior.advance(to=0.4)
+
+        for direction in (
+            "north",
+            "northeast",
+            "east",
+            "southeast",
+            "south",
+            "southwest",
+            "west",
+            "northwest",
+        ):
+            behavior.pointer_moved(direction, horizontal_delta=0.0, at=0.41)
+            self.assertEqual(behavior.snapshot().variant, f"front_{direction}")
+
+    def test_mouse_hunt_tracks_with_iris_frames_without_a_body_sway_timer(self):
+        behavior = PetBehavior()
+        self.trigger_mouse_hunt(behavior)
+        behavior.advance(to=0.4)
+
+        behavior.pointer_moved("west", horizontal_delta=0.0, at=0.41)
+        self.assertEqual(behavior.snapshot().variant, "front_west")
+        behavior.pointer_moved("east", horizontal_delta=0.0, at=0.42)
+        self.assertEqual(behavior.snapshot().variant, "front_east")
+        self.assertIsNone(behavior.schedule().frame_interval)
+
+    def test_mouse_hunt_holds_then_rises_and_can_reverse_rise(self):
+        behavior = PetBehavior()
+        self.trigger_mouse_hunt(behavior)
+        behavior.advance(to=0.601)
+        self.assertEqual(behavior.snapshot().variant, "transition_2")
+        behavior.advance(to=0.7)
+        self.assertEqual(behavior.snapshot().activity, "mouse_hunt_transition")
+
+        behavior.pointer_moved("west", horizontal_delta=-1.1, at=0.71)
+        behavior.pointer_moved("east", horizontal_delta=1.1, at=0.76)
+        behavior.pointer_moved("west", horizontal_delta=-1.1, at=0.81)
+        self.assertEqual(behavior.snapshot().variant, "transition_1")
+
+        behavior.advance(to=1.01)
+        self.assertEqual(behavior.snapshot().activity, "mouse_hunt")
+
+    def test_reduced_motion_suppresses_tracking_and_mouse_hunt(self):
+        behavior = PetBehavior(reduced_motion=True)
+        self.trigger_mouse_hunt(behavior)
+        self.assertEqual(behavior.snapshot().activity, "sitting")
+
+        behavior.reduced_motion_changed(False, at=0.3)
+        self.trigger_mouse_hunt(behavior, start=0.4)
+        self.assertEqual(behavior.snapshot().activity, "mouse_hunt_transition")
+        behavior.reduced_motion_changed(True, at=0.7)
+        self.assertEqual(behavior.snapshot().activity, "sitting")
+
+    def test_typing_interrupts_mouse_hunt_instead_of_queueing_it(self):
+        behavior = PetBehavior()
+        self.trigger_mouse_hunt(behavior)
+        behavior.typing_step(at=0.25)
+        self.assertEqual(behavior.snapshot().activity, "typing")
+        behavior.typing_held(False, at=0.3)
+        self.assertEqual(behavior.snapshot().activity, "typing_hold")
 
     def test_deliberate_head_rub_activates_petting_pose(self):
         behavior = PetBehavior()

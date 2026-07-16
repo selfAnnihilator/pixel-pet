@@ -20,6 +20,22 @@ _Avoid_: Typing frame, key animation
 The normalized `x` and `y` position owned by Pet Behavior and returned by Behavior Snapshot. The pet remains at this user-chosen position during normal behavior. Walking or autonomous roaming is not part of the active behavior model; only explicit drag movement changes Stationary Placement. Companion Presentation converts between normalized placement and viewport coordinates, including sprite-aware clamping.
 _Avoid_: Idle location, home position
 
+**Mouse Hunt**:
+A stronger pointer reaction activated by a horizontal cursor shake containing two direction reversals within 300 milliseconds, with each leg spanning at least one visible Catbone width. Catbone enters Mouse Hunt Pose while qualifying shaking continues; disabling system animations suppresses the reaction entirely so Catbone remains sitting.
+_Avoid_: Cursor chase, hunting run, autonomous roaming
+
+**Mouse Hunt Pose**:
+The low front-facing crouch used during Mouse Hunt. Its body stays still while its large white eyes keep black irises that track the cursor in all eight directions. Every cursor direction uses this same front-facing artwork; only the iris frame changes. The feet, sprite anchor, and Stationary Placement remain fixed.
+_Avoid_: Hunt sprite, running pose
+
+**Mouse Hunt Hold**:
+The 400-millisecond interval after the last qualifying movement when Catbone holds Mouse Hunt Pose while its eyes continue tracking the cursor. Continued qualifying horizontal shaking extends the reaction and restarts this hold; otherwise Catbone returns to Tracking Pose afterward.
+_Avoid_: Hunt cooldown, fixed hunt animation
+
+**Mouse Hunt Transition**:
+The 200-millisecond compress from sitting into Mouse Hunt Pose and the matching 200-millisecond rise after Mouse Hunt Hold. These transitions keep Catbone's feet and Stationary Placement anchored; a qualifying shake during the rise reverses smoothly from its current progress, and completing the rise adds no cooldown before another hunt can begin.
+_Avoid_: Hunt startup, crouch animation
+
 **Petting Activity**:
 Repeated left-right rubbing after the primary mouse button is pressed and held inside the Petting Region. The press origin selects the interaction: a Petting Region press arms Petting Activity, while a press on any remaining opaque body pixel begins the existing drag-and-drop interaction. That selection stays locked until the button is released, even when the pointer crosses between head and body. An armed head press causes no visual reaction until the first Petting Stroke reversal; releasing before that reversal ends silently with no Petting Pose, Petting Heart, or Petting Hold. The first valid reversal activates Petting Activity, shows the Petting Pose, and emits the first Petting Heart. While valid rubbing continues, Petting Hearts emit every 300 milliseconds independently of individual reversals, with at most three visible at once. Stroke movement counts only inside the Petting Region plus a small tolerance. Leaving that area or pausing the rubbing stops new hearts without changing the locked interaction; existing hearts finish vanishing, and returning resumes progress and emission. Active Petting Activity keeps the pet at its Stationary Placement.
 _Avoid_: Click reaction, affection animation
@@ -52,12 +68,16 @@ _Avoid_: Petting sprite, happy animation
 The pet pose selected from pointer direction while pointer activity is occurring; its forward-facing frame is also the normal sitting pose.
 _Avoid_: Idle animation, default state
 
+**Pointer Tracking**:
+A Live Setting that enables both Tracking Pose and Mouse Hunt. When disabled, pointer movement causes no visible reaction and Catbone remains sitting unless a non-pointer activity takes priority.
+_Avoid_: Mouse Hunt toggle, cursor mode
+
 **Interaction Priority**:
-The ordering that decides which visible pet behavior wins when user activities overlap: pause/fullscreen hiding, body drag, active Petting Activity, Typing Activity, Petting Hold, Tracking Pose, Typing Hold, then normal sitting. Lower-priority activity observed during hiding, dragging, or active Petting Activity is discarded rather than queued. If keys remain held when Petting Activity ends, the ongoing Typing Activity becomes visible immediately instead of entering Petting Hold.
+The ordering that decides which visible pet behavior wins when user activities overlap: pause/fullscreen hiding, body drag, active Petting Activity, Typing Activity, Petting Hold, Mouse Hunt or Mouse Hunt Hold, Tracking Pose, Typing Hold, then normal sitting. Lower-priority activity observed during a higher-priority interaction is discarded rather than queued; if keys remain held when Petting Activity ends, the ongoing Typing Activity becomes visible immediately instead of entering Petting Hold.
 _Avoid_: State override, animation priority
 
 **Pet Behavior**:
-The deep module and sole owner of companion state, timers, Interaction Priority, Stationary Placement, drag activity and semantic wobble, gesture progress, Typing Activity and Typing Hold, Tracking Pose arbitration, Hiding Reasons, and Petting Heart lifetimes. Its active behavior set is normal sitting/Tracking Pose, Typing Activity/Typing Hold, body drag, Petting Activity/Petting Hold, and pause/fullscreen hiding. Callers supply monotonic time with every Behavior Activity and through explicit advancement; the implementation never reads the system clock. Its implementation does not own GTK event handling, raw input capture, input repeat suppression, settings persistence, sprite geometry, numeric sprite frames, viewport coordinates, or raster drawing.
+The deep module and sole owner of companion state, timers, Interaction Priority, Stationary Placement, drag activity and semantic wobble, gesture progress, Typing Activity and Typing Hold, Tracking Pose and Mouse Hunt arbitration, Hiding Reasons, and Petting Heart lifetimes. Its active behavior set is normal sitting/Tracking Pose, Mouse Hunt/Mouse Hunt Hold/Mouse Hunt Transition, Typing Activity/Typing Hold, body drag, Petting Activity/Petting Hold, and pause/fullscreen hiding. Callers supply monotonic time with every Behavior Activity and through explicit advancement; the implementation never reads the system clock. Its implementation does not own GTK event handling, raw input capture, input repeat suppression, settings persistence, sprite geometry, numeric sprite frames, viewport coordinates, or raster drawing.
 _Avoid_: Pet state machine, behavior service
 
 **Behavior Snapshot**:

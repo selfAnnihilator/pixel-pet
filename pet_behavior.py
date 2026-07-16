@@ -74,6 +74,14 @@ class PetBehavior:
         self._typing_hold_until: float | None = None
         self._next_typing_variant = "left"
         self._tracking_direction: str | None = None
+        self._hunt_phase: str | None = None
+        self._hunt_crouch = 0.0
+        self._hunt_hold_until: float | None = None
+        self._hunt_gaze = "forward"
+        self._shake_direction = 0
+        self._shake_travel = 0.0
+        self._shake_reversals = 0
+        self._shake_started_at: float | None = None
         self._hidden = False
         self._hiding_reasons: set[str] = set()
         self._dragging = False
@@ -147,6 +155,7 @@ class PetBehavior:
             )
             if not self._petting_active:
                 self._petting_active = True
+                self._cancel_hunt()
                 self._hearts.append(self._new_heart(now))
                 self._last_heart_at = now
 
@@ -169,6 +178,10 @@ class PetBehavior:
             self._petting_variant = "relaxed"
             if self._reduced_motion:
                 self._hearts.clear()
+        self._cancel_hunt()
+        self._tracking_direction = None
+        self._tracking_expires_at = None
+        self._reset_shake()
         self._typing_active = True
         self._typing_hold_until = None
         self._typing_variant = self._next_typing_variant
@@ -195,12 +208,65 @@ class PetBehavior:
             self._typing_variant = "ready"
 
     def tracking_changed(self, direction: str | None, *, at: float) -> None:
-        if not self._tracking_enabled or self._hidden or self._dragging:
+        if (
+            not self._tracking_enabled
+            or self._reduced_motion
+            or self._hidden
+            or self._dragging
+        ):
             return
         self._tracking_direction = direction
         self._tracking_expires_at = (
             at + self._tracking_hold_seconds if direction is not None else None
         )
+
+    def pointer_moved(
+        self,
+        direction: str | None,
+        *,
+        horizontal_delta: float,
+        at: float,
+    ) -> None:
+        """Observe pointer gaze and horizontal travel measured in cat widths."""
+        self.tracking_changed(direction, at=at)
+        if self._hunt_phase is not None:
+            self._hunt_gaze = direction or "forward"
+        if not self._can_hunt():
+            self._reset_shake()
+            return
+
+        delta = float(horizontal_delta)
+        if abs(delta) < 1e-6:
+            return
+        move_direction = 1 if delta > 0 else -1
+        if (
+            self._shake_started_at is not None
+            and at - self._shake_started_at > 0.3
+        ):
+            self._reset_shake()
+        if self._shake_direction == 0:
+            self._shake_direction = move_direction
+            self._shake_travel = abs(delta)
+            self._shake_started_at = at
+            return
+        if move_direction == self._shake_direction:
+            self._shake_travel += abs(delta)
+            return
+
+        completed_leg = self._shake_travel
+        self._shake_direction = move_direction
+        self._shake_travel = abs(delta)
+        if completed_leg < 1.0:
+            self._shake_reversals = 0
+            self._shake_started_at = at
+            return
+
+        self._shake_reversals += 1
+        if self._shake_reversals < 2:
+            return
+        self._activate_hunt(direction=direction, at=at)
+        self._shake_reversals = 0
+        self._shake_started_at = at
 
     def tracking_enabled_changed(self, enabled: bool, *, at: float) -> None:
         del at
@@ -208,9 +274,16 @@ class PetBehavior:
         if not enabled:
             self._tracking_direction = None
             self._tracking_expires_at = None
+            self._cancel_hunt()
+            self._reset_shake()
 
     def _set_reduced_motion(self, enabled: bool) -> None:
         self._reduced_motion = bool(enabled)
+        if self._reduced_motion:
+            self._tracking_direction = None
+            self._tracking_expires_at = None
+            self._cancel_hunt()
+            self._reset_shake()
         if self._reduced_motion and self._petting_active:
             self._petting_variant = "relaxed"
             self._hearts = self._hearts[:1]
@@ -256,6 +329,8 @@ class PetBehavior:
             self._typing_variant = "ready"
             self._tracking_direction = None
             self._tracking_expires_at = None
+            self._cancel_hunt()
+            self._reset_shake()
             self._inside_petting = False
             self._petting_variant = "relaxed"
             self._hearts.clear()
@@ -271,6 +346,8 @@ class PetBehavior:
             self._typing_variant = "ready"
             self._tracking_direction = None
             self._tracking_expires_at = None
+            self._cancel_hunt()
+            self._reset_shake()
             self._inside_petting = False
             self._petting_variant = "relaxed"
             self._hearts.clear()
@@ -306,6 +383,7 @@ class PetBehavior:
                 self._typing_hold_until,
                 self._petting_hold_until,
                 self._tracking_expires_at,
+                self._hunt_hold_until,
             )
             if deadline is not None
         ]
@@ -320,10 +398,45 @@ class PetBehavior:
             and self._advanced_to - self._drag_moved_at <= 0.12
         )
         moving_hearts = bool(self._hearts) and not self._reduced_motion
+        moving_hunt = self._hunt_phase in ("enter", "exit")
         return BehaviorSchedule(
             next_at=min(deadlines) if deadlines else None,
-            frame_interval=(1 / 30) if moving_drag or moving_hearts else None,
+            frame_interval=(1 / 30)
+            if moving_drag or moving_hearts or moving_hunt
+            else None,
         )
+
+    def _can_hunt(self) -> bool:
+        return (
+            self._tracking_enabled
+            and not self._reduced_motion
+            and not self._hidden
+            and not self._dragging
+            and not self._typing_active
+            and not self._petting_active
+            and self._petting_hold_until is None
+        )
+
+    def _activate_hunt(self, *, direction: str | None, at: float) -> None:
+        if self._hunt_phase is None:
+            self._hunt_phase = "enter"
+            self._hunt_crouch = 0.0
+        elif self._hunt_phase == "exit":
+            self._hunt_phase = "enter"
+        self._hunt_gaze = direction or "forward"
+        self._hunt_hold_until = at + 0.4
+
+    def _reset_shake(self) -> None:
+        self._shake_direction = 0
+        self._shake_travel = 0.0
+        self._shake_reversals = 0
+        self._shake_started_at = None
+
+    def _cancel_hunt(self) -> None:
+        self._hunt_phase = None
+        self._hunt_crouch = 0.0
+        self._hunt_hold_until = None
+        self._hunt_gaze = "forward"
 
     def _new_heart(self, born_at: float) -> _Heart:
         heart = _Heart(born_at=born_at, drift=(self._heart_serial % 3) - 1)
@@ -332,6 +445,21 @@ class PetBehavior:
 
     def _advance_timed_state(self, now: float) -> None:
         elapsed = max(0.0, now - self._advanced_to)
+        if self._hunt_phase == "enter":
+            self._hunt_crouch = min(1.0, self._hunt_crouch + elapsed / 0.2)
+            if self._hunt_crouch >= 1.0:
+                self._hunt_phase = "active"
+        elif self._hunt_phase == "exit":
+            self._hunt_crouch = max(0.0, self._hunt_crouch - elapsed / 0.2)
+            if self._hunt_crouch <= 0.0:
+                self._cancel_hunt()
+        if (
+            self._hunt_phase == "active"
+            and self._hunt_hold_until is not None
+            and now >= self._hunt_hold_until
+        ):
+            self._hunt_phase = "exit"
+            self._hunt_hold_until = None
         if self._dragging:
             moving = (
                 self._drag_moved_at is not None
@@ -397,6 +525,17 @@ class PetBehavior:
             activity = "typing"
         elif self._petting_hold_until is not None:
             activity = "petting_hold"
+        elif self._hunt_phase is not None:
+            activity = (
+                "mouse_hunt" if self._hunt_phase == "active" else "mouse_hunt_transition"
+            )
+            pose = "hunting"
+            if self._hunt_phase == "enter":
+                variant = f"transition_{round(self._hunt_crouch * 2)}"
+            elif self._hunt_phase == "exit":
+                variant = f"transition_{2 + round((1.0 - self._hunt_crouch) * 2)}"
+            else:
+                variant = f"front_{self._hunt_gaze}"
         elif self._tracking_direction is not None:
             activity = "tracking"
             pose = "tracking"

@@ -68,6 +68,19 @@
         }
       }
     },
+    "catbone_hunt": {
+      "sheet": "catbone/hunt.png",
+      "icon": "catbone/icon.png",
+      "cellW": 64,
+      "cellH": 64,
+      "cols": 9,
+      "scale": 1.5,
+      "facesRight": true,
+      "anims": {
+        "hunt_front": { "row": 0, "frames": 9, "fps": 30, "loop": false },
+        "hunt_transition": { "row": 1, "frames": 5, "fps": 10, "loop": false }
+      }
+    },
     "goldie": {
       "sheet": "puppy/goldie.png",
       "icon": "puppy/icon.png",

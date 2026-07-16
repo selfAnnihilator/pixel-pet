@@ -100,9 +100,11 @@ class Pet:
         drag_def = pet_defs.get(self.name + "_drag")
         type_def = pet_defs.get(self.name + "_type")
         pet_def = pet_defs.get(self.name + "_pet")
+        hunt_def = pet_defs.get(self.name + "_hunt")
         self.drag_sheet = Sheet(drag_def) if drag_def is not None else None
         self.type_sheet = Sheet(type_def) if type_def is not None else None
         self.pet_sheet = Sheet(pet_def) if pet_def is not None else None
+        self.hunt_sheet = Sheet(hunt_def) if hunt_def is not None else None
         self._heart_path = os.path.join(ASSETS, self.name, "heart.png")
         self.heart_pixbuf = None
         settings = settings or DEFAULTS
@@ -137,6 +139,7 @@ class Pet:
             "user-pause", hidden=user_paused, at=time.monotonic()
         )
         self._interaction_target = None
+        self._last_pointer_x = None
 
     # ---- behavior -------------------------------------------------------
     @property
@@ -153,7 +156,13 @@ class Pet:
 
     def set_size_percent(self, percent):
         self.size_percent = max(75, min(200, int(percent)))
-        for sheet in (self.sheet, self.drag_sheet, self.type_sheet, self.pet_sheet):
+        for sheet in (
+            self.sheet,
+            self.drag_sheet,
+            self.type_sheet,
+            self.pet_sheet,
+            self.hunt_sheet,
+        ):
             if sheet is not None:
                 sheet.scale = self.presentation.overlay_scale(
                     base_scale=sheet.base_scale,
@@ -322,6 +331,7 @@ class Pet:
             "drag": self.drag_sheet,
             "type": self.type_sheet,
             "pet": self.pet_sheet,
+            "hunt": self.hunt_sheet,
         }
 
     def sheet_for(self, name):
@@ -374,14 +384,29 @@ class Pet:
         self.frame = frame
         return sheet, state
 
-    def observe_pointer(self, x, y, at):
+    def observe_pointer(self, x, y, at, horizontal_deltas=()):
         cx, cy = self._cat_center()
         direction = self.presentation.tracking_direction(
             dx=x - cx,
             dy=y - cy,
             deadzone=DEADZONE,
         )
-        self.behavior.tracking_changed(direction, at=at)
+        bounds = self.sheet.bboxes["track"][0]
+        visible_width = max(1, bounds[2] - bounds[0]) * self.sheet.scale
+        fallback_delta = (
+            0.0 if self._last_pointer_x is None else x - self._last_pointer_x
+        )
+        self._last_pointer_x = x
+        deltas = tuple(horizontal_deltas) or (fallback_delta,)
+        for index, delta in enumerate(deltas):
+            sample_direction = direction
+            if index < len(deltas) - 1:
+                sample_direction = "east" if delta > 0 else "west"
+            self.behavior.pointer_moved(
+                sample_direction,
+                horizontal_delta=delta / visible_width,
+                at=at,
+            )
 
     def observe_typing_step(self, at):
         if self.type_sheet is not None:
@@ -516,7 +541,12 @@ def main():
 
     def on_observation(observation):
         if isinstance(observation, PointerMotion):
-            pet.observe_pointer(observation.x, observation.y, observation.at)
+            pet.observe_pointer(
+                observation.x,
+                observation.y,
+                observation.at,
+                observation.horizontal_deltas,
+            )
         elif isinstance(observation, TypingStep):
             pet.observe_typing_step(observation.at)
         elif isinstance(observation, TypingHeld):

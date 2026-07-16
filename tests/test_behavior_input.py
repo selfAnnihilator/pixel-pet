@@ -42,7 +42,30 @@ class BehaviorInputTests(unittest.TestCase):
 
         self.flush()
 
-        self.assertEqual(self.deliveries, [PointerMotion(505.0, 393.0, 1.1)])
+        self.assertEqual(
+            self.deliveries,
+            [PointerMotion(505.0, 393.0, 1.1, (5.0,))],
+        )
+        adapter.close()
+
+    def test_pointer_coalescing_preserves_horizontal_reversals(self):
+        adapter = self.make_adapter()
+        adapter.consume_pointer_bytes(
+            event(adapter.EV_REL, adapter.REL_X, 80), at=1.0
+        )
+        adapter.consume_pointer_bytes(
+            event(adapter.EV_REL, adapter.REL_X, -90), at=1.1
+        )
+        adapter.consume_pointer_bytes(
+            event(adapter.EV_REL, adapter.REL_X, 100), at=1.2
+        )
+
+        self.flush()
+
+        self.assertEqual(
+            self.deliveries,
+            [PointerMotion(590.0, 400.0, 1.2, (80.0, -90.0, 100.0))],
+        )
         adapter.close()
 
     def test_keyboard_preserves_steps_and_combines_held_state(self):

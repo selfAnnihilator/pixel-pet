@@ -57,6 +57,23 @@ class PetLiveSettingsTests(unittest.TestCase):
         self.assertEqual(companion.drag_sheet.scale, 2.25)
         self.assertEqual(companion.type_sheet.scale, 1.125)
         self.assertEqual(companion.pet_sheet.scale, 2.25)
+        self.assertEqual(companion.hunt_sheet.scale, 2.25)
+
+    def test_coalesced_pointer_turning_points_trigger_mouse_hunt(self):
+        companion = self.make_pet()
+        companion.set_viewport(1000, 800)
+
+        companion.observe_pointer(
+            800,
+            600,
+            0.2,
+            horizontal_deltas=(110.0, -110.0, 110.0),
+        )
+
+        self.assertEqual(
+            companion.behavior.snapshot().activity,
+            "mouse_hunt_transition",
+        )
 
     def test_petting_reactions_can_be_disabled_live(self):
         companion = self.make_pet()
