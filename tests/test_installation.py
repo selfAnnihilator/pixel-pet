@@ -57,7 +57,7 @@ class InstallationTests(unittest.TestCase):
                 text=True,
                 timeout=5,
             )
-            self.assertEqual(version.stdout.strip(), "Pixel Pet 0.2.0")
+            self.assertEqual(version.stdout.strip(), "Pixel Pet 0.3.1")
 
             help_result = subprocess.run(
                 [command, "--help"],
@@ -122,7 +122,7 @@ class InstallationTests(unittest.TestCase):
             release = home / "release.json"
             release.write_text(
                 json.dumps({
-                    "tag_name": "v0.3.0",
+                    "tag_name": "v0.3.2",
                     "tarball_url": "https://example.invalid/pixel-pet.tar.gz",
                 }),
                 encoding="utf-8",
@@ -150,26 +150,26 @@ class InstallationTests(unittest.TestCase):
                 capture_output=True,
                 text=True,
             )
-            self.assertIn("0.3.0 is available", result.stdout)
+            self.assertIn("0.3.2 is available", result.stdout)
 
     def test_update_installs_newer_stable_release(self):
         project = Path(__file__).resolve().parents[1]
         with tempfile.TemporaryDirectory() as temporary:
             home = Path(temporary)
-            release_root = home / "pixel-pet-0.2.0"
+            release_root = home / "pixel-pet-0.3.2"
             shutil.copytree(
                 project,
                 release_root,
                 ignore=shutil.ignore_patterns(".git", "__pycache__", "node_modules"),
             )
-            (release_root / "VERSION").write_text("0.2.0\n", encoding="utf-8")
-            archive = home / "pixel-pet-0.2.0.tar.gz"
+            (release_root / "VERSION").write_text("0.3.2\n", encoding="utf-8")
+            archive = home / "pixel-pet-0.3.2.tar.gz"
             with tarfile.open(archive, "w:gz") as bundle:
                 bundle.add(release_root, arcname=release_root.name)
             release = home / "release.json"
             release.write_text(
                 json.dumps({
-                    "tag_name": "v0.2.0",
+                    "tag_name": "v0.3.2",
                     "tarball_url": archive.as_uri(),
                 }),
                 encoding="utf-8",
@@ -204,7 +204,7 @@ class InstallationTests(unittest.TestCase):
                 capture_output=True,
                 text=True,
             )
-            self.assertEqual(version.stdout.strip(), "Pixel Pet 0.2.0")
+            self.assertEqual(version.stdout.strip(), "Pixel Pet 0.3.2")
 
 
 if __name__ == "__main__":
